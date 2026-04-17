@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.github
+.vscode
+.idea
+.DS_Store
+.env*
+.live
+*.log
+coverage
+out
+build
+dist
+python/__pycache__
+**/__pycache__
