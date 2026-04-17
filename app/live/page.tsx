@@ -1,7 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+} from "recharts";
 
 type LiveStatus = {
   configured: boolean;
@@ -80,6 +90,19 @@ type RunnerPayload = {
   events: RunnerEvent[];
 };
 
+type Trade = {
+  entry_ts: string;
+  exit_ts: string;
+  entry_price: number;
+  exit_price: number;
+  qty: number;
+  pnl_pct: number;
+  pnl_usdt: number;
+  mode: string;
+  forced?: string | null;
+  cumulative_pnl: number;
+};
+
 type SessionBrief = {
   session_id: string;
   user_input: string;
@@ -108,6 +131,7 @@ export default function LivePage() {
   const [runnerMsg, setRunnerMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [cfgDraft, setCfgDraft] = useState<RunnerConfig | null>(null);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const loadStatus = useCallback(async () => {
@@ -128,6 +152,16 @@ export default function LivePage() {
     } catch {}
   }, []);
 
+  const loadTrades = useCallback(async () => {
+    try {
+      const res = await fetch("/api/live/runner/trades", { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as { trades: Trade[] };
+        setTrades(data.trades || []);
+      }
+    } catch {}
+  }, []);
+
   const loadSessions = useCallback(async () => {
     try {
       const res = await fetch("/api/sessions/list", { cache: "no-store" });
@@ -142,11 +176,15 @@ export default function LivePage() {
     loadStatus();
     loadRunner();
     loadSessions();
-    pollRef.current = setInterval(loadRunner, 5000);
+    loadTrades();
+    pollRef.current = setInterval(() => {
+      loadRunner();
+      loadTrades();
+    }, 5000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [loadStatus, loadRunner, loadSessions]);
+  }, [loadStatus, loadRunner, loadSessions, loadTrades]);
 
   async function handleSave() {
     setMessage(null);
@@ -295,6 +333,32 @@ export default function LivePage() {
 
   const pos = runner?.state.position;
   const balance = runner?.state.balance;
+  const lastPrice = runner?.state.last_price;
+
+  const unrealizedPnl = useMemo(() => {
+    if (!pos?.holding || !pos.entry_price || !lastPrice || !pos.qty) return null;
+    const pnlUsdt = (lastPrice - pos.entry_price) * pos.qty;
+    const pnlPct = ((lastPrice - pos.entry_price) / pos.entry_price) * 100;
+    return { pnlUsdt, pnlPct };
+  }, [pos, lastPrice]);
+
+  const realizedPnl = runner?.state.stats?.total_pnl_usdt ?? 0;
+  const totalPnl = realizedPnl + (unrealizedPnl?.pnlUsdt ?? 0);
+
+  const chartData = useMemo(() => {
+    if (trades.length === 0) return [];
+    const data: Array<{ idx: number; cumulative: number; label: string }> = [
+      { idx: 0, cumulative: 0, label: "起点" },
+    ];
+    trades.forEach((t, i) => {
+      data.push({
+        idx: i + 1,
+        cumulative: t.cumulative_pnl,
+        label: t.exit_ts?.slice(5, 16).replace("T", " ") || `#${i + 1}`,
+      });
+    });
+    return data;
+  }, [trades]);
 
   return (
     <div
@@ -715,14 +779,32 @@ export default function LivePage() {
                 }
               />
               <Stat
-                label="累计盈亏（USDT）"
+                label="已实现盈亏（USDT）"
                 value={
                   typeof runner.state.stats?.total_pnl_usdt === "number"
-                    ? `${runner.state.stats.total_pnl_usdt >= 0 ? "+" : ""}${runner.state.stats.total_pnl_usdt.toFixed(2)}`
+                    ? `${realizedPnl >= 0 ? "+" : ""}${realizedPnl.toFixed(2)}`
                     : "—"
                 }
-                hi={(runner.state.stats?.total_pnl_usdt ?? 0) > 0}
-                lo={(runner.state.stats?.total_pnl_usdt ?? 0) < 0}
+                hi={realizedPnl > 0}
+                lo={realizedPnl < 0}
+              />
+              <Stat
+                label="浮动盈亏（持仓）"
+                value={
+                  unrealizedPnl
+                    ? `${unrealizedPnl.pnlUsdt >= 0 ? "+" : ""}${unrealizedPnl.pnlUsdt.toFixed(2)} USDT (${unrealizedPnl.pnlPct >= 0 ? "+" : ""}${unrealizedPnl.pnlPct.toFixed(2)}%)`
+                    : pos?.holding
+                    ? "计算中…"
+                    : "—"
+                }
+                hi={(unrealizedPnl?.pnlUsdt ?? 0) > 0}
+                lo={(unrealizedPnl?.pnlUsdt ?? 0) < 0}
+              />
+              <Stat
+                label="总盈亏（已实现 + 浮动）"
+                value={`${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)} USDT`}
+                hi={totalPnl > 0}
+                lo={totalPnl < 0}
               />
             </div>
 
@@ -737,13 +819,125 @@ export default function LivePage() {
           </section>
         )}
 
+        {/* 收益曲线 + 交易记录 */}
+        {trades.length > 0 && (
+          <section
+            className="rounded-2xl p-6 border space-y-4 mb-6"
+            style={{ background: "#16161F", borderColor: "#1E1E2E" }}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-white font-semibold">5. 收益</h2>
+              <span className="text-xs text-gray-500">共 {trades.length} 笔交易</span>
+            </div>
+
+            <div style={{ height: 240 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1E1E2E" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: "#8E8EA0", fontSize: 10 }}
+                    stroke="#2E2E3E"
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fill: "#8E8EA0", fontSize: 10 }}
+                    stroke="#2E2E3E"
+                    tickFormatter={(v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`}
+                  />
+                  <Tooltip
+                    contentStyle={{ background: "#0A0A0F", border: "1px solid #1E1E2E", borderRadius: 8 }}
+                    labelStyle={{ color: "#8E8EA0", fontSize: 11 }}
+                    itemStyle={{ color: "#00E5A0", fontSize: 12 }}
+                    formatter={(v) => {
+                      const n = typeof v === "number" ? v : 0;
+                      return [`${n >= 0 ? "+" : ""}${n.toFixed(4)} USDT`, "累计盈亏"];
+                    }}
+                  />
+                  <ReferenceLine y={0} stroke="#2E2E3E" strokeDasharray="2 2" />
+                  <Line
+                    type="monotone"
+                    dataKey="cumulative"
+                    stroke="#00E5A0"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: "#00E5A0" }}
+                    activeDot={{ r: 5 }}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500 border-b" style={{ borderColor: "#1E1E2E" }}>
+                    <th className="text-left py-2 px-2 font-normal">平仓时间</th>
+                    <th className="text-right py-2 px-2 font-normal">入场</th>
+                    <th className="text-right py-2 px-2 font-normal">出场</th>
+                    <th className="text-right py-2 px-2 font-normal">数量</th>
+                    <th className="text-right py-2 px-2 font-normal">单笔 PnL</th>
+                    <th className="text-right py-2 px-2 font-normal">累计</th>
+                    <th className="text-left py-2 px-2 font-normal">类型</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades
+                    .slice()
+                    .reverse()
+                    .slice(0, 30)
+                    .map((t, i) => {
+                      const pnlColor = t.pnl_usdt > 0 ? "#00E5A0" : t.pnl_usdt < 0 ? "#FF6B8A" : "#8E8EA0";
+                      return (
+                        <tr key={i} className="border-b" style={{ borderColor: "#15151E" }}>
+                          <td className="py-2 px-2 text-gray-400 font-mono">
+                            {t.exit_ts?.slice(0, 16).replace("T", " ") || "—"}
+                          </td>
+                          <td className="py-2 px-2 text-right text-gray-400">${t.entry_price.toFixed(2)}</td>
+                          <td className="py-2 px-2 text-right text-gray-400">${t.exit_price.toFixed(2)}</td>
+                          <td className="py-2 px-2 text-right text-gray-500 font-mono">{t.qty.toFixed(6)}</td>
+                          <td className="py-2 px-2 text-right font-mono" style={{ color: pnlColor }}>
+                            {t.pnl_usdt >= 0 ? "+" : ""}
+                            {t.pnl_usdt.toFixed(2)} ({t.pnl_pct >= 0 ? "+" : ""}
+                            {t.pnl_pct.toFixed(2)}%)
+                          </td>
+                          <td className="py-2 px-2 text-right font-mono text-gray-300">
+                            {t.cumulative_pnl >= 0 ? "+" : ""}
+                            {t.cumulative_pnl.toFixed(2)}
+                          </td>
+                          <td className="py-2 px-2">
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded"
+                              style={{
+                                background: t.mode === "live" ? "rgba(255,107,138,0.1)" : "rgba(143,184,255,0.1)",
+                                color: t.mode === "live" ? "#FF6B8A" : "#8FB8FF",
+                              }}
+                            >
+                              {t.mode}
+                            </span>
+                            {t.forced && (
+                              <span className="ml-1 text-[10px] text-amber-300">{t.forced}</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+              {trades.length > 30 && (
+                <p className="text-xs text-gray-600 text-center mt-2">仅显示最近 30 笔</p>
+              )}
+            </div>
+          </section>
+        )}
+
         {/* 事件 */}
         {runner?.events && runner.events.length > 0 && (
           <section
             className="rounded-2xl p-6 border space-y-3 mb-10"
             style={{ background: "#16161F", borderColor: "#1E1E2E" }}
           >
-            <h2 className="text-white font-semibold">5. 最近事件</h2>
+            <h2 className="text-white font-semibold">6. 最近事件</h2>
             <div className="space-y-1 max-h-96 overflow-y-auto font-mono text-xs leading-relaxed">
               {runner.events
                 .slice()
