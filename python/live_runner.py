@@ -314,21 +314,36 @@ def decide_and_trade(ex, cfg: dict, active: dict, df: pd.DataFrame) -> Optional[
         try:
             res = place_order(ex, "sell", 0, last_price, dry_run=cfg["mode"] != "live")
             pnl_pct = None
+            pnl_usdt = 0.0
             if position.get("entry_price"):
-                pnl_pct = round((last_price - float(position["entry_price"])) / float(position["entry_price"]) * 100, 3)
+                entry = float(position["entry_price"])
+                qty = float(position.get("qty") or 0)
+                pnl_pct = round((last_price - entry) / entry * 100, 3)
+                pnl_usdt = round((last_price - entry) * qty, 4)
             position = {"holding": False, "entry_price": None, "qty": 0.0, "entry_ts": None}
-            action_result = {"action": "close_long", "result": res, "pnl_pct": pnl_pct}
+            action_result = {"action": "close_long", "result": res, "pnl_pct": pnl_pct, "pnl_usdt": pnl_usdt}
         except Exception as e:
             action_result = {"action": "close_long_failed", "error": str(e)[:400]}
 
     if action_result:
         event.update(action_result)
 
+    stats = state.get("stats") or {"trades": 0, "wins": 0, "losses": 0, "total_pnl_usdt": 0.0}
+    if action_result and action_result.get("action") == "close_long":
+        stats["trades"] = int(stats.get("trades", 0)) + 1
+        pu = float(action_result.get("pnl_usdt") or 0)
+        stats["total_pnl_usdt"] = round(float(stats.get("total_pnl_usdt", 0)) + pu, 4)
+        if (action_result.get("pnl_pct") or 0) > 0:
+            stats["wins"] = int(stats.get("wins", 0)) + 1
+        else:
+            stats["losses"] = int(stats.get("losses", 0)) + 1
+
     save_state(
         last_bar_ts=last_closed_bar_ts,
         last_price=last_price,
         position=position,
         last_event=event,
+        stats=stats,
     )
     append_event(event)
     return event
@@ -353,51 +368,54 @@ def handle_stop(signum, frame):
     sys.exit(0)
 
 
-def main() -> None:
+def run_single_tick() -> dict:
+    """执行一次 tick 并返回事件。供 --once 和 API 手动触发调用。"""
     ensure_live_dir()
+    cred = read_json(CRED_PATH) or {}
+    env_key = os.environ.get("BINANCE_API_KEY", "").strip()
+    env_secret = os.environ.get("BINANCE_API_SECRET", "").strip()
+    if env_key and env_secret:
+        cred = {"apiKey": env_key, "apiSecret": env_secret}
+    if not cred.get("apiKey") or not cred.get("apiSecret"):
+        return {"ok": False, "reason": "no_credentials"}
+    active = load_active()
+    if not active:
+        return {"ok": False, "reason": "no_active_strategy"}
+
+    timeframe = active.get("timeframe") or "1h"
+    cfg = load_config()
+    ex = build_exchange(cred)
+    df = fetch_ohlcv(ex, timeframe=timeframe, limit=300)
+    balance = fetch_balance_safe(ex)
+    save_state(
+        status="running",
+        active_session_id=active.get("session_id"),
+        timeframe=timeframe,
+        mode=cfg["mode"],
+        balance=balance,
+        max_order_usdt=cfg["max_order_usdt"],
+        stop_loss_pct=cfg["stop_loss_pct"],
+        take_profit_pct=cfg["take_profit_pct"],
+    )
+    event = decide_and_trade(ex, cfg, active, df)
+    return {"ok": True, "event": event, "skipped": event is None}
+
+
+def main_loop() -> None:
     write_pid()
     signal.signal(signal.SIGTERM, handle_stop)
     signal.signal(signal.SIGINT, handle_stop)
-
     save_state(status="starting", pid=os.getpid())
     log("实盘守护启动")
 
     while True:
         try:
-            cred = read_json(CRED_PATH) or {}
-            env_key = os.environ.get("BINANCE_API_KEY", "").strip()
-            env_secret = os.environ.get("BINANCE_API_SECRET", "").strip()
-            if env_key and env_secret:
-                cred = {"apiKey": env_key, "apiSecret": env_secret}
-            if not cred.get("apiKey") or not cred.get("apiSecret"):
-                save_state(status="waiting", reason="no_credentials")
+            res = run_single_tick()
+            if not res.get("ok"):
+                save_state(status="waiting", reason=res.get("reason"))
                 time.sleep(5)
                 continue
-
-            active = load_active()
-            if not active:
-                save_state(status="waiting", reason="no_active_strategy")
-                time.sleep(5)
-                continue
-
-            timeframe = active.get("timeframe") or "1h"
             cfg = load_config()
-            ex = build_exchange(cred)
-
-            df = fetch_ohlcv(ex, timeframe=timeframe, limit=300)
-            balance = fetch_balance_safe(ex)
-            save_state(
-                status="running",
-                active_session_id=active.get("session_id"),
-                timeframe=timeframe,
-                mode=cfg["mode"],
-                balance=balance,
-                max_order_usdt=cfg["max_order_usdt"],
-                stop_loss_pct=cfg["stop_loss_pct"],
-                take_profit_pct=cfg["take_profit_pct"],
-            )
-            decide_and_trade(ex, cfg, active, df)
-
             time.sleep(int(cfg.get("tick_seconds", 60)))
         except KeyboardInterrupt:
             break
@@ -405,6 +423,19 @@ def main() -> None:
             log(f"主循环异常：{e}", level="error", traceback=traceback.format_exc()[:2000])
             save_state(status="error", error=str(e)[:400])
             time.sleep(15)
+
+
+def main() -> None:
+    ensure_live_dir()
+    if "--once" in sys.argv:
+        try:
+            res = run_single_tick()
+            print(json.dumps(res, ensure_ascii=False, default=str))
+        except Exception as e:
+            print(json.dumps({"ok": False, "error": str(e)[:400]}))
+            sys.exit(1)
+        return
+    main_loop()
 
 
 if __name__ == "__main__":

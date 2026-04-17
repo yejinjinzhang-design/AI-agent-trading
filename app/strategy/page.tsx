@@ -455,6 +455,11 @@ function StrategyPageContent() {
                   ? "使用 ANTHROPIC_API_KEY · Claude Sonnet 4.6 官方 API"
                   : "使用 DEEPSEEK_API_KEY · DeepSeek Chat API（需在 .env.local 配置）"}
               </p>
+
+              <BindToLiveButton
+                sessionId={sessionId}
+                hasChampion={!!backtest && !!summary}
+              />
             </div>
           </div>
         )}
@@ -472,6 +477,67 @@ export default function StrategyPage() {
 }
 
 // ---- Sub-components ----
+
+function BindToLiveButton({ sessionId, hasChampion }: { sessionId: string; hasChampion: boolean }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [useChampion, setUseChampion] = useState(false);
+  const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  async function handleBind() {
+    if (!sessionId) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/live/runner/bind", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, use_champion: useChampion }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "绑定失败");
+      setMsg({ type: "ok", text: "已绑定，正在跳转实盘面板…" });
+      setTimeout(() => router.push("/live"), 700);
+    } catch (e) {
+      setMsg({ type: "err", text: e instanceof Error ? e.message : "绑定失败" });
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 p-4 rounded-xl max-w-lg mx-auto"
+      style={{ background: "#0A0A0F", border: "1px solid #1E1E2E" }}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-left">
+          <div className="text-white text-sm font-medium">把当前策略挂到实盘</div>
+          <div className="text-gray-500 text-xs mt-0.5">
+            默认先走 paper（模拟），去实盘面板开启
+          </div>
+        </div>
+        <button
+          onClick={handleBind}
+          disabled={busy || !sessionId}
+          className="px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50 whitespace-nowrap"
+          style={{ background: "#1E1E2E", color: "#E0E0E8", border: "1px solid #2E2E3E" }}
+        >
+          {busy ? "绑定中…" : "绑定到实盘 →"}
+        </button>
+      </div>
+      {hasChampion && (
+        <label className="flex items-center gap-2 text-xs text-gray-400 mt-3 cursor-pointer">
+          <input type="checkbox" checked={useChampion} onChange={(e) => setUseChampion(e.target.checked)} />
+          <span>使用进化冠军策略（若已完成进化）</span>
+        </label>
+      )}
+      {msg && (
+        <p className="text-xs mt-2"
+          style={{ color: msg.type === "ok" ? "#00E5A0" : "#FF6B8A" }}>
+          {msg.text}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function StepIndicator({ step, label, active, done }: { step: number; label: string; active: boolean; done: boolean }) {
   return (

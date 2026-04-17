@@ -38,6 +38,12 @@ type RunnerState = {
   last_price?: number;
   position?: RunnerPosition;
   last_event?: Record<string, unknown>;
+  stats?: {
+    trades?: number;
+    wins?: number;
+    losses?: number;
+    total_pnl_usdt?: number;
+  };
 };
 
 type ActiveStrategy = {
@@ -74,6 +80,17 @@ type RunnerPayload = {
   events: RunnerEvent[];
 };
 
+type SessionBrief = {
+  session_id: string;
+  user_input: string;
+  strategy_summary: string;
+  timeframe?: string;
+  created_at: number;
+  has_champion: boolean;
+  user_sharpe?: number;
+  champion_sharpe?: number;
+};
+
 export default function LivePage() {
   const [status, setStatus] = useState<LiveStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
@@ -87,6 +104,7 @@ export default function LivePage() {
   const [runner, setRunner] = useState<RunnerPayload | null>(null);
   const [sessionId, setSessionId] = useState("");
   const [useChampion, setUseChampion] = useState(false);
+  const [sessions, setSessions] = useState<SessionBrief[]>([]);
   const [runnerMsg, setRunnerMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [cfgDraft, setCfgDraft] = useState<RunnerConfig | null>(null);
@@ -110,14 +128,25 @@ export default function LivePage() {
     } catch {}
   }, []);
 
+  const loadSessions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/sessions/list", { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as { sessions: SessionBrief[] };
+        setSessions(data.sessions || []);
+      }
+    } catch {}
+  }, []);
+
   useEffect(() => {
     loadStatus();
     loadRunner();
+    loadSessions();
     pollRef.current = setInterval(loadRunner, 5000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [loadStatus, loadRunner]);
+  }, [loadStatus, loadRunner, loadSessions]);
 
   async function handleSave() {
     setMessage(null);
@@ -250,6 +279,17 @@ export default function LivePage() {
         body: JSON.stringify(cfgDraft),
       });
       setRunnerMsg({ type: "ok", text: "已保存风控参数（守护进程下一轮生效）" });
+    } catch {}
+  }
+
+  async function handleTickOnce() {
+    try {
+      const data = await callRunner("/api/live/runner/tick", { method: "POST" });
+      if (data?.skipped) {
+        setRunnerMsg({ type: "ok", text: "这根已收盘 K 线已处理过（跳过）" });
+      } else {
+        setRunnerMsg({ type: "ok", text: "已手动触发一次 tick，查看事件列表" });
+      }
     } catch {}
   }
 
@@ -423,31 +463,83 @@ export default function LivePage() {
                 解除绑定
               </button>
             </div>
+          ) : sessions.length === 0 ? (
+            <div
+              className="rounded-xl px-4 py-6 text-center text-sm text-gray-500"
+              style={{ background: "#0A0A0F", border: "1px dashed #1E1E2E" }}
+            >
+              还没有策略会话。先到首页生成一个策略，再回来绑定。
+            </div>
           ) : (
             <>
-              <div className="flex gap-2">
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {sessions.map((s) => {
+                  const selected = sessionId === s.session_id;
+                  return (
+                    <button
+                      key={s.session_id}
+                      type="button"
+                      onClick={() => setSessionId(s.session_id)}
+                      className="w-full text-left rounded-xl px-4 py-3 transition-colors"
+                      style={{
+                        background: selected ? "rgba(0,229,160,0.08)" : "#0A0A0F",
+                        border: selected ? "1px solid rgba(0,229,160,0.35)" : "1px solid #1E1E2E",
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-white text-sm truncate">
+                            {s.user_input || s.strategy_summary || s.session_id}
+                          </div>
+                          <div className="text-gray-500 text-xs mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                            <span className="font-mono">{s.session_id.slice(0, 20)}…</span>
+                            {s.timeframe && <span>周期 {s.timeframe}</span>}
+                            {typeof s.user_sharpe === "number" && <span>Sharpe {s.user_sharpe.toFixed(2)}</span>}
+                            {s.has_champion && (
+                              <span className="text-[#00E5A0]">
+                                含冠军{typeof s.champion_sharpe === "number" ? ` · Sharpe ${s.champion_sharpe.toFixed(2)}` : ""}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {selected && <span className="text-[#00E5A0] text-xs shrink-0">✓</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <label className="flex items-center gap-2 text-xs text-gray-400">
                 <input
-                  type="text"
-                  value={sessionId}
-                  onChange={(e) => setSessionId(e.target.value)}
-                  placeholder="sess_xxxxxxxxxx"
-                  className="flex-1 rounded-xl px-4 py-2.5 text-white text-sm outline-none font-mono"
-                  style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+                  type="checkbox"
+                  checked={useChampion}
+                  onChange={(e) => setUseChampion(e.target.checked)}
+                  disabled={!sessionId || !sessions.find((s) => s.session_id === sessionId)?.has_champion}
                 />
+                <span>
+                  使用进化冠军
+                  {sessionId && !sessions.find((s) => s.session_id === sessionId)?.has_champion && (
+                    <span className="text-gray-600">（该会话无冠军）</span>
+                  )}
+                </span>
+              </label>
+              <div className="flex gap-2 pt-1">
                 <button
                   type="button"
                   onClick={handleBind}
-                  disabled={busy}
+                  disabled={busy || !sessionId}
                   className="px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
-                  style={{ background: "#1E1E2E", color: "#E0E0E8", border: "1px solid #2E2E3E" }}
+                  style={{ background: "linear-gradient(135deg, #00E5A0, #00C080)", color: "#0A0A0F" }}
                 >
-                  绑定
+                  绑定选中的策略
+                </button>
+                <button
+                  type="button"
+                  onClick={loadSessions}
+                  className="px-3 py-2 rounded-xl text-xs text-gray-500 hover:text-white transition-colors"
+                >
+                  刷新列表
                 </button>
               </div>
-              <label className="flex items-center gap-2 text-xs text-gray-400">
-                <input type="checkbox" checked={useChampion} onChange={(e) => setUseChampion(e.target.checked)} />
-                <span>使用该会话的进化冠军策略（若已完成进化）</span>
-              </label>
             </>
           )}
         </section>
@@ -561,6 +653,15 @@ export default function LivePage() {
                 启动
               </button>
             )}
+            <button
+              type="button"
+              onClick={handleTickOnce}
+              disabled={busy}
+              className="px-4 py-2 rounded-xl text-sm text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+              title="立刻跑一次策略 tick（不依赖守护进程是否运行，可用于调试）"
+            >
+              立即执行一次
+            </button>
           </div>
 
           {runnerMsg && (
@@ -605,6 +706,24 @@ export default function LivePage() {
                 label="余额"
                 value={balance ? `${balance.USDT?.toFixed(2)} USDT · ${balance.BTC?.toFixed(6)} BTC` : "—"}
               />
+              <Stat
+                label="累计交易"
+                value={
+                  runner.state.stats
+                    ? `${runner.state.stats.trades ?? 0} 笔 · 胜 ${runner.state.stats.wins ?? 0} · 败 ${runner.state.stats.losses ?? 0}`
+                    : "—"
+                }
+              />
+              <Stat
+                label="累计盈亏（USDT）"
+                value={
+                  typeof runner.state.stats?.total_pnl_usdt === "number"
+                    ? `${runner.state.stats.total_pnl_usdt >= 0 ? "+" : ""}${runner.state.stats.total_pnl_usdt.toFixed(2)}`
+                    : "—"
+                }
+                hi={(runner.state.stats?.total_pnl_usdt ?? 0) > 0}
+                lo={(runner.state.stats?.total_pnl_usdt ?? 0) < 0}
+              />
             </div>
 
             {runner.state.error && (
@@ -640,11 +759,22 @@ export default function LivePage() {
   );
 }
 
-function Stat({ label, value, hi }: { label: string; value: React.ReactNode; hi?: boolean }) {
+function Stat({
+  label,
+  value,
+  hi,
+  lo,
+}: {
+  label: string;
+  value: React.ReactNode;
+  hi?: boolean;
+  lo?: boolean;
+}) {
+  const color = hi ? "text-[#00E5A0]" : lo ? "text-[#FF6B8A]" : "text-white";
   return (
     <div className="rounded-xl px-3 py-2.5" style={{ background: "#0A0A0F", border: "1px solid #1E1E2E" }}>
       <div className="text-gray-500 text-xs">{label}</div>
-      <div className={`text-sm mt-0.5 ${hi ? "text-[#00E5A0]" : "text-white"}`}>{value}</div>
+      <div className={`text-sm mt-0.5 ${color}`}>{value}</div>
     </div>
   );
 }
