@@ -33,6 +33,14 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# 本地保存的实盘 API（勿提交）
+.live/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # vercel
 .vercel
 

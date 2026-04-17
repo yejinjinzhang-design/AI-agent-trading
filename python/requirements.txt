@@ -1,0 +1,4 @@
+anthropic
+ccxt
+pandas
+numpy
