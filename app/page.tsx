@@ -40,7 +40,7 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4"
+    <div className="min-h-screen flex flex-col items-center px-4 py-16"
       style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(0,229,160,0.07) 0%, #0A0A0F 60%)" }}>
 
       {/* Logo */}
@@ -53,19 +53,6 @@ export default function HomePage() {
           <span className="text-white text-xl font-semibold tracking-wide">CORAL Strategy Protocol</span>
         </div>
         <p className="text-gray-500 text-sm">AI驱动的加密策略进化平台</p>
-        <nav className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-4 text-xs">
-          <Link href="/compare" className="text-gray-500 hover:text-[#00E5A0] transition-colors">
-            策略对比
-          </Link>
-          <span className="text-gray-700">·</span>
-          <Link href="/evolve" className="text-gray-500 hover:text-[#00E5A0] transition-colors">
-            进化
-          </Link>
-          <span className="text-gray-700">·</span>
-          <Link href="/live" className="text-gray-500 hover:text-[#00E5A0] transition-colors">
-            实盘
-          </Link>
-        </nav>
       </div>
 
       {/* Main Card */}
@@ -161,22 +148,120 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* 底部特性说明 */}
-      <div className="mt-12 grid grid-cols-3 gap-6 max-w-2xl w-full">
+      {/* 功能导航 · 4 卡片 */}
+      <div className="w-full max-w-2xl mt-14">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-white text-base font-semibold">进阶工作台</h2>
+          <span className="text-xs text-gray-600">生成策略后，你可以在这里继续</span>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <FeatureCard
+            href="/compare"
+            icon="⚖️"
+            title="策略对比"
+            desc="原始 vs 进化冠军，Sharpe / 回撤 / 权益曲线并排看"
+            accent="#00E5A0"
+          />
+          <FeatureCard
+            href="/evolve"
+            icon="🧬"
+            title="进化"
+            desc="4 个 AI Agent 多轮迭代，自动搜索更优参数与条件"
+            accent="#7B61FF"
+          />
+          <FeatureCard
+            href="/live"
+            icon="🚀"
+            title="实盘"
+            desc="绑定币安 API · paper/live 双模式 · 实时收益曲线"
+            accent="#FFB547"
+          />
+          <FeatureCard
+            href="/sessions"
+            icon="✅"
+            title="验证"
+            desc="我的策略库 · 重新回测 · 查看历史与冠军策略"
+            accent="#8FB8FF"
+          />
+        </div>
+      </div>
+
+      {/* 平台特性说明 */}
+      <div className="mt-10 grid grid-cols-3 gap-3 max-w-2xl w-full">
         {[
           { icon: "⚡", title: "AI 策略翻译", desc: "自然语言 → 可执行代码" },
-          { icon: "📊", title: "真实回测引擎", desc: "5年 BTC 历史数据验证" },
+          { icon: "📊", title: "真实回测引擎", desc: "5 年 BTC 历史数据验证" },
           { icon: "🧬", title: "多 Agent 进化", desc: "4 个 AI 自动优化策略" },
         ].map(item => (
-          <div key={item.title} className="text-center p-4 rounded-xl"
+          <div key={item.title} className="text-center p-3 rounded-xl"
             style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
-            <div className="text-2xl mb-2">{item.icon}</div>
-            <div className="text-white text-sm font-medium mb-1">{item.title}</div>
-            <div className="text-gray-500 text-xs">{item.desc}</div>
+            <div className="text-xl mb-1">{item.icon}</div>
+            <div className="text-white text-xs font-medium mb-0.5">{item.title}</div>
+            <div className="text-gray-500 text-[11px]">{item.desc}</div>
           </div>
         ))}
       </div>
     </div>
+  );
+}
+
+function FeatureCard({
+  href,
+  icon,
+  title,
+  desc,
+  accent,
+}: {
+  href: string;
+  icon: string;
+  title: string;
+  desc: string;
+  accent: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group relative rounded-2xl p-5 border transition-all duration-200 overflow-hidden"
+      style={{
+        background: "#16161F",
+        borderColor: "#1E1E2E",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLAnchorElement).style.borderColor = `${accent}55`;
+        (e.currentTarget as HTMLAnchorElement).style.transform = "translateY(-2px)";
+        (e.currentTarget as HTMLAnchorElement).style.boxShadow = `0 8px 24px -8px ${accent}40`;
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLAnchorElement).style.borderColor = "#1E1E2E";
+        (e.currentTarget as HTMLAnchorElement).style.transform = "translateY(0)";
+        (e.currentTarget as HTMLAnchorElement).style.boxShadow = "none";
+      }}
+    >
+      <div
+        className="absolute top-0 left-0 w-full h-0.5"
+        style={{ background: `linear-gradient(90deg, transparent, ${accent}, transparent)` }}
+      />
+      <div className="flex items-start gap-3">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+          style={{ background: `${accent}18`, border: `1px solid ${accent}33` }}
+        >
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-white text-sm font-semibold">{title}</span>
+            <span
+              className="text-xs transition-transform duration-200 group-hover:translate-x-0.5"
+              style={{ color: accent }}
+            >
+              →
+            </span>
+          </div>
+          <p className="text-gray-500 text-xs mt-1 leading-relaxed">{desc}</p>
+        </div>
+      </div>
+    </Link>
   );
 }
 

@@ -41,9 +41,22 @@ __pycache__/
 *.pyc
 *.pyo
 
+# 数据库文件（体积大，本地运行）
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# 采集器日志
+modules/sentiment_momentum/logs/
+
+# Playwright 浏览器缓存
+playwright-report/
+
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+AI-agent-trading/
