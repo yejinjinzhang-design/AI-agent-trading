@@ -1,0 +1,61 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+@theme static {
+  --font-fd-sans: 'DM Sans', system-ui, sans-serif;
+  --font-fd-mono: 'DM Mono', ui-monospace, monospace;
+}
+
+/* CORAL blog palette — exact same hex values as the blog */
+html, html.light, :root {
+  --color-fd-background: #f3f6fb !important;
+  --color-fd-foreground: #18222e !important;
+  --color-fd-muted: #dde4f0 !important;
+  --color-fd-muted-foreground: #647585 !important;
+  --color-fd-popover: #e8edf6 !important;
+  --color-fd-popover-foreground: #18222e !important;
+  --color-fd-card: #e8edf6 !important;
+  --color-fd-card-foreground: #18222e !important;
+  --color-fd-border: #bec8d8 !important;
+  --color-fd-primary: #18222e !important;
+  --color-fd-primary-foreground: #f3f6fb !important;
+  --color-fd-secondary: #dde4f0 !important;
+  --color-fd-secondary-foreground: #18222e !important;
+  --color-fd-accent: #bec8d880 !important;
+  --color-fd-accent-foreground: #18222e !important;
+  --color-fd-ring: #aab4c6 !important;
+  --fd-layout-width: 100vw;
+}
+
+body, #nd-sidebar, nav, aside {
+  background-color: #f3f6fb !important;
+}
+
+/* Heading typography — Source Serif 4 */
+h1, h2, h3, h4 {
+  font-family: 'Source Serif 4', Georgia, serif;
+  letter-spacing: -0.015em;
+  color: #18222e;
+}
+
+/* Body text color */
+body, p, li, td {
+  color: #26323f;
+}
+
+/* Code block font */
+pre, code {
+  font-family: 'DM Mono', ui-monospace, monospace;
+}
+
+/* Inline code */
+code:not(pre code) {
+  background: #dde4f0;
+}
+
+/* Fix: fumadocs TOC scroll area mask */
+#nd-toc [class*="overflow-auto"] {
+  mask-image: linear-gradient(to bottom, transparent, white 16px) !important;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, white 16px) !important;
+}

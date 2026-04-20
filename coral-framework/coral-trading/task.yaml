@@ -1,0 +1,43 @@
+task:
+  name: sentiment_momentum
+  description: |
+    优化币安合约情绪动量交易策略。
+
+    seed/strategy.py 包含策略参数和信号逻辑。
+    你可以修改任何内容:参数、关键词、信号逻辑、评分公式。
+
+    约束(违反判 -999):
+    - LEVERAGE <= 2
+    - BASE_POSITION_PCT <= 0.15
+    - MAX_CONCURRENT_POSITIONS <= 3
+    - 必须有 STOP_LOSS 逻辑
+    - generate_signals(data) 签名不变
+
+    评分: Sharpe x3 + 胜率 x2 + (1-回撤) x2 + 信号数 x1 + 收益 x1
+
+  tips: |
+    - 调整社交闸门和行情闸门的阈值
+    - 修改情感关键词权重
+    - 改变综合评分公式
+    - 增加新的过滤条件
+    - 优化方向判定逻辑
+
+grader:
+  timeout: 60
+  direction: maximize
+  args:
+    program_file: "strategy.py"
+
+agents:
+  count: 2
+  runtime: claude_code
+  model: sonnet
+
+workspace:
+  results_dir: "./results"
+  repo_path: "./seed"
+
+run:
+  verbose: false
+  ui: false
+  session: tmux
