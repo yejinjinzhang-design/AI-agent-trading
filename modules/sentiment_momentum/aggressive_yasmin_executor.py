@@ -125,6 +125,68 @@ def _state_name(side: str | None, add_count: int) -> str:
 def ensure_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        CREATE TABLE IF NOT EXISTS config_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          version TEXT UNIQUE NOT NULL,
+          config_json TEXT NOT NULL,
+          description TEXT,
+          activated_at TEXT,
+          deactivated_at TEXT,
+          is_active INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT NOT NULL DEFAULT 'system'
+        );
+        CREATE INDEX IF NOT EXISTS ix_config_snapshots_active ON config_snapshots(is_active, activated_at);
+
+        CREATE TABLE IF NOT EXISTS coral_interventions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          intervention_type TEXT NOT NULL,
+          target_symbol TEXT,
+          reason TEXT,
+          params_json TEXT,
+          executed_at TEXT NOT NULL,
+          operator TEXT NOT NULL,
+          result TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_coral_interventions_at ON coral_interventions(executed_at);
+
+        CREATE TABLE IF NOT EXISTS live_trades (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          trade_id TEXT UNIQUE NOT NULL,
+          symbol TEXT NOT NULL,
+          direction TEXT NOT NULL,
+          status TEXT NOT NULL,
+          entry_price REAL,
+          entry_qty REAL,
+          entry_at TEXT,
+          stop_loss_price REAL,
+          signal_id TEXT,
+          strategy_version TEXT,
+          is_paper INTEGER NOT NULL DEFAULT 1,
+          account_type TEXT NOT NULL DEFAULT 'paper',
+          exit_price REAL,
+          exit_qty REAL,
+          exit_at TEXT,
+          exit_reason TEXT,
+          realized_pnl REAL,
+          realized_pnl_pct REAL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_live_trades_status ON live_trades(symbol, status, entry_at);
+
+        CREATE TABLE IF NOT EXISTS trade_lifecycle_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          trade_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          price REAL,
+          qty REAL,
+          pnl_snapshot REAL,
+          note TEXT,
+          raw_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_trade_lifecycle_events_at ON trade_lifecycle_events(trade_id, occurred_at);
+
         CREATE TABLE IF NOT EXISTS yasmin_btc_state (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           mode TEXT NOT NULL DEFAULT 'paper',
