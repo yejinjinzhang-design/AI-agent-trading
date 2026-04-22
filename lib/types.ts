@@ -68,6 +68,8 @@ export interface EvolutionLog {
   agent_id: string;
   agent_name: string;
   round: number;
+  mutation_desc?: string;
+  message?: string;
   action: string;       // "尝试了 ATR 止损优化"
   sharpe_before: number;
   sharpe_after: number;
@@ -80,6 +82,7 @@ export interface EvolutionLog {
 export interface EvolutionStatus {
   session_id: string;
   status: "running" | "completed" | "error" | "pending";
+  goal?: string;
   current_round: number;
   total_rounds: number;
   agents: AgentState[];

@@ -1,23 +1,35 @@
 /**
  * 币安实盘 API 凭据 + 守护进程的配置/状态/事件 读写
- * 所有文件写到 .live/（已 gitignore）
+ * 支持多实例：.live/instances/<instanceId>/（legacy：仅 .live/ 根目录单租户）
  */
 import fs from "fs";
 import path from "path";
 
-const LIVE_DIR = path.join(process.cwd(), ".live");
-const CRED_PATH = path.join(LIVE_DIR, "binance.json");
-const ACTIVE_PATH = path.join(LIVE_DIR, "active_strategy.json");
-const CONFIG_PATH = path.join(LIVE_DIR, "runner_config.json");
-const STATE_PATH = path.join(LIVE_DIR, "state.json");
-const EVENTS_PATH = path.join(LIVE_DIR, "events.jsonl");
-const PID_PATH = path.join(LIVE_DIR, "runner.pid");
+import {
+  DEFAULT_INSTANCE_ID,
+  getLivePaths,
+} from "./live-instances";
 
-function ensureDir() {
-  if (!fs.existsSync(LIVE_DIR)) {
-    fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o700 });
-  }
-}
+export type { LivePaths } from "./live-instances";
+
+export {
+  DEFAULT_INSTANCE_ID,
+  getLivePaths,
+  sanitizeInstanceId,
+  type LiveAccount,
+  type InstanceMeta,
+  listAccounts,
+  getAccount,
+  upsertAccount,
+  deleteAccount,
+  materializeInstanceCredentials,
+  createInstance,
+  loadInstanceMeta,
+  saveInstanceMeta,
+  listInstanceIds,
+  absLiveDirForRunner,
+} from "./live-instances";
+
 
 function readJson<T>(p: string): T | null {
   if (!fs.existsSync(p)) return null;
@@ -29,7 +41,10 @@ function readJson<T>(p: string): T | null {
 }
 
 function writeJson(p: string, data: unknown) {
-  ensureDir();
+  const dir = require("path").dirname(p);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
   fs.writeFileSync(p, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
@@ -37,6 +52,7 @@ export type BinanceCredentials = {
   apiKey: string;
   apiSecret: string;
   updatedAt: string;
+  accountId?: string;
 };
 
 export function getBinanceCredentialsFromEnv(): BinanceCredentials | null {
@@ -48,7 +64,10 @@ export function getBinanceCredentialsFromEnv(): BinanceCredentials | null {
   return null;
 }
 
-export function loadBinanceCredentialsFromFile(): BinanceCredentials | null {
+export function loadBinanceCredentialsFromFile(
+  instanceId?: string
+): BinanceCredentials | null {
+  const { CRED_PATH } = getLivePaths(instanceId);
   if (!fs.existsSync(CRED_PATH)) return null;
   try {
     const raw = fs.readFileSync(CRED_PATH, "utf-8");
@@ -58,20 +77,27 @@ export function loadBinanceCredentialsFromFile(): BinanceCredentials | null {
   }
 }
 
-/** 优先环境变量，其次本地 .live 文件 */
-export function loadBinanceCredentials(): BinanceCredentials | null {
-  return getBinanceCredentialsFromEnv() || loadBinanceCredentialsFromFile();
+/** 优先环境变量，其次当前实例目录下的 binance.json */
+export function loadBinanceCredentials(
+  instanceId?: string
+): BinanceCredentials | null {
+  return getBinanceCredentialsFromEnv() || loadBinanceCredentialsFromFile(instanceId);
 }
 
 export type LiveCredentialSource = "env" | "file" | "none";
 
-export function getCredentialsSource(): LiveCredentialSource {
+export function getCredentialsSource(instanceId?: string): LiveCredentialSource {
   if (getBinanceCredentialsFromEnv()) return "env";
-  if (loadBinanceCredentialsFromFile()) return "file";
+  if (loadBinanceCredentialsFromFile(instanceId)) return "file";
   return "none";
 }
 
-export function saveBinanceCredentials(apiKey: string, apiSecret: string): void {
+export function saveBinanceCredentials(
+  apiKey: string,
+  apiSecret: string,
+  instanceId?: string
+): void {
+  const { CRED_PATH, LIVE_DIR } = getLivePaths(instanceId);
   if (!fs.existsSync(LIVE_DIR)) {
     fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o700 });
   }
@@ -83,7 +109,8 @@ export function saveBinanceCredentials(apiKey: string, apiSecret: string): void 
   fs.writeFileSync(CRED_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
-export function clearBinanceCredentialsFile(): void {
+export function clearBinanceCredentialsFile(instanceId?: string): void {
+  const { CRED_PATH } = getLivePaths(instanceId);
   if (fs.existsSync(CRED_PATH)) {
     fs.unlinkSync(CRED_PATH);
   }
@@ -104,15 +131,18 @@ export type ActiveStrategy = {
   bound_at: string;
 };
 
-export function loadActiveStrategy(): ActiveStrategy | null {
+export function loadActiveStrategy(instanceId?: string): ActiveStrategy | null {
+  const { ACTIVE_PATH } = getLivePaths(instanceId);
   return readJson<ActiveStrategy>(ACTIVE_PATH);
 }
 
-export function saveActiveStrategy(s: ActiveStrategy): void {
+export function saveActiveStrategy(s: ActiveStrategy, instanceId?: string): void {
+  const { ACTIVE_PATH } = getLivePaths(instanceId);
   writeJson(ACTIVE_PATH, s);
 }
 
-export function clearActiveStrategy(): void {
+export function clearActiveStrategy(instanceId?: string): void {
+  const { ACTIVE_PATH } = getLivePaths(instanceId);
   if (fs.existsSync(ACTIVE_PATH)) fs.unlinkSync(ACTIVE_PATH);
 }
 
@@ -134,13 +164,18 @@ export const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
   tick_seconds: 60,
 };
 
-export function loadRunnerConfig(): RunnerConfig {
+export function loadRunnerConfig(instanceId?: string): RunnerConfig {
+  const { CONFIG_PATH } = getLivePaths(instanceId);
   const data = readJson<Partial<RunnerConfig>>(CONFIG_PATH) || {};
   return { ...DEFAULT_RUNNER_CONFIG, ...data };
 }
 
-export function saveRunnerConfig(cfg: Partial<RunnerConfig>): RunnerConfig {
-  const merged = { ...loadRunnerConfig(), ...cfg };
+export function saveRunnerConfig(
+  cfg: Partial<RunnerConfig>,
+  instanceId?: string
+): RunnerConfig {
+  const merged = { ...loadRunnerConfig(instanceId), ...cfg };
+  const { CONFIG_PATH } = getLivePaths(instanceId);
   writeJson(CONFIG_PATH, merged);
   return merged;
 }
@@ -169,25 +204,37 @@ export type RunnerState = {
   max_order_usdt?: number;
   stop_loss_pct?: number;
   take_profit_pct?: number;
+  stats?: {
+    trades?: number;
+    wins?: number;
+    losses?: number;
+    total_pnl_usdt?: number;
+  };
 };
 
-export function loadRunnerState(): RunnerState {
+export function loadRunnerState(instanceId?: string): RunnerState {
+  const { STATE_PATH } = getLivePaths(instanceId);
   return readJson<RunnerState>(STATE_PATH) || {};
 }
 
-export function getRunnerPid(): number | null {
+export function getRunnerPid(instanceId?: string): number | null {
+  const { PID_PATH } = getLivePaths(instanceId);
   if (!fs.existsSync(PID_PATH)) return null;
   const raw = fs.readFileSync(PID_PATH, "utf-8").trim();
   const pid = parseInt(raw, 10);
   return Number.isFinite(pid) ? pid : null;
 }
 
-export function setRunnerPid(pid: number): void {
-  ensureDir();
+export function setRunnerPid(pid: number, instanceId?: string): void {
+  const { PID_PATH, LIVE_DIR } = getLivePaths(instanceId);
+  if (!fs.existsSync(LIVE_DIR)) {
+    fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o700 });
+  }
   fs.writeFileSync(PID_PATH, String(pid), { mode: 0o600 });
 }
 
-export function clearRunnerPid(): void {
+export function clearRunnerPid(instanceId?: string): void {
+  const { PID_PATH } = getLivePaths(instanceId);
   if (fs.existsSync(PID_PATH)) fs.unlinkSync(PID_PATH);
 }
 
@@ -200,7 +247,11 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-export function readLastEvents(limit = 50): Array<Record<string, unknown>> {
+export function readLastEvents(
+  limit = 50,
+  instanceId?: string
+): Array<Record<string, unknown>> {
+  const { EVENTS_PATH } = getLivePaths(instanceId);
   if (!fs.existsSync(EVENTS_PATH)) return [];
   try {
     const raw = fs.readFileSync(EVENTS_PATH, "utf-8");
@@ -220,14 +271,3 @@ export function readLastEvents(limit = 50): Array<Record<string, unknown>> {
   }
 }
 
-export function getLivePaths() {
-  return {
-    LIVE_DIR,
-    CRED_PATH,
-    ACTIVE_PATH,
-    CONFIG_PATH,
-    STATE_PATH,
-    EVENTS_PATH,
-    PID_PATH,
-  };
-}

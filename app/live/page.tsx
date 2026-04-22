@@ -12,6 +12,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
+import { PageShell, Card, Alert, T } from "@/components/page-shell";
 
 type LiveStatus = {
   configured: boolean;
@@ -82,12 +83,37 @@ type RunnerEvent = {
 };
 
 type RunnerPayload = {
+  instance_id?: string;
   pid: number | null;
   running: boolean;
   state: RunnerState;
   config: RunnerConfig;
   active: ActiveStrategy | null;
   events: RunnerEvent[];
+};
+
+type AccountRow = {
+  id: string;
+  label: string;
+  maskedKey: string;
+  updatedAt: string;
+};
+
+type InstanceMonitorRow = {
+  instance_id: string;
+  label: string;
+  accountId: string | null;
+  legacyRoot: boolean;
+  running: boolean;
+  pid: number | null;
+  state_summary: {
+    mode?: string;
+    last_price?: number;
+    total_pnl_usdt?: number;
+    updated_at?: string;
+    error?: string;
+  };
+  active: { session_id: string; timeframe: string; summary?: string; bound_at: string } | null;
 };
 
 type Trade = {
@@ -134,6 +160,14 @@ export default function LivePage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
+  /** 多实例：当前操作的实例 id（default / base / champ …） */
+  const [selectedInstanceId, setSelectedInstanceId] = useState("default");
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [instanceMonitor, setInstanceMonitor] = useState<InstanceMonitorRow[]>([]);
+  const [newInstId, setNewInstId] = useState("base");
+  const [newInstLabel, setNewInstLabel] = useState("基础策略");
+  const [newInstAccount, setNewInstAccount] = useState("");
+
   const loadStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/live/status");
@@ -141,26 +175,52 @@ export default function LivePage() {
     } catch {}
   }, []);
 
-  const loadRunner = useCallback(async () => {
+  const loadAccounts = useCallback(async () => {
     try {
-      const res = await fetch("/api/live/runner/status", { cache: "no-store" });
+      const res = await fetch("/api/live/accounts", { cache: "no-store" });
       if (res.ok) {
-        const data = (await res.json()) as RunnerPayload;
-        setRunner(data);
-        setCfgDraft((prev) => prev ?? data.config);
+        const data = (await res.json()) as { accounts: AccountRow[] };
+        setAccounts(data.accounts || []);
       }
     } catch {}
   }, []);
 
+  const loadInstanceMonitor = useCallback(async () => {
+    try {
+      const res = await fetch("/api/live/instances", { cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as { instances: InstanceMonitorRow[] };
+        setInstanceMonitor(data.instances || []);
+      }
+    } catch {}
+  }, []);
+
+  const loadRunner = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/live/runner/status?instance_id=${encodeURIComponent(selectedInstanceId)}`,
+        { cache: "no-store" }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as RunnerPayload;
+        setRunner(data);
+        setCfgDraft(data.config);
+      }
+    } catch {}
+  }, [selectedInstanceId]);
+
   const loadTrades = useCallback(async () => {
     try {
-      const res = await fetch("/api/live/runner/trades", { cache: "no-store" });
+      const res = await fetch(
+        `/api/live/runner/trades?instance_id=${encodeURIComponent(selectedInstanceId)}`,
+        { cache: "no-store" }
+      );
       if (res.ok) {
         const data = (await res.json()) as { trades: Trade[] };
         setTrades(data.trades || []);
       }
     } catch {}
-  }, []);
+  }, [selectedInstanceId]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -174,17 +234,23 @@ export default function LivePage() {
 
   useEffect(() => {
     loadStatus();
-    loadRunner();
+    loadAccounts();
+    loadInstanceMonitor();
     loadSessions();
-    loadTrades();
     pollRef.current = setInterval(() => {
       loadRunner();
       loadTrades();
+      loadInstanceMonitor();
     }, 5000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [loadStatus, loadRunner, loadSessions, loadTrades]);
+  }, [loadStatus, loadRunner, loadSessions, loadTrades, loadAccounts, loadInstanceMonitor]);
+
+  useEffect(() => {
+    loadRunner();
+    loadTrades();
+  }, [selectedInstanceId, loadRunner, loadTrades]);
 
   async function handleSave() {
     setMessage(null);
@@ -195,7 +261,11 @@ export default function LivePage() {
       const res = await fetch("/api/live/credentials", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim(), apiSecret: apiSecret.trim() }),
+        body: JSON.stringify({
+          apiKey: apiKey.trim(),
+          apiSecret: apiSecret.trim(),
+          instance_id: selectedInstanceId,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "保存失败");
@@ -214,7 +284,10 @@ export default function LivePage() {
     setMessage(null);
     setLoading(true);
     try {
-      const res = await fetch("/api/live/credentials", { method: "DELETE" });
+      const res = await fetch(
+        `/api/live/credentials?instance_id=${encodeURIComponent(selectedInstanceId)}`,
+        { method: "DELETE" }
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "清除失败");
       setMessage({
@@ -242,7 +315,11 @@ export default function LivePage() {
       const res = await fetch("/api/live/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(hasInline ? { apiKey: apiKey.trim(), apiSecret: apiSecret.trim() } : {}),
+        body: JSON.stringify(
+          hasInline
+            ? { apiKey: apiKey.trim(), apiSecret: apiSecret.trim(), instance_id: selectedInstanceId }
+            : { instance_id: selectedInstanceId }
+        ),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "测试失败");
@@ -281,7 +358,11 @@ export default function LivePage() {
       await callRunner("/api/live/runner/bind", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId.trim(), use_champion: useChampion }),
+        body: JSON.stringify({
+          session_id: sessionId.trim(),
+          use_champion: useChampion,
+          instance_id: selectedInstanceId,
+        }),
       });
       setRunnerMsg({ type: "ok", text: "已绑定策略，可以启动守护进程" });
     } catch {}
@@ -289,21 +370,32 @@ export default function LivePage() {
 
   async function handleUnbind() {
     try {
-      await callRunner("/api/live/runner/bind", { method: "DELETE" });
+      await callRunner(
+        `/api/live/runner/bind?instance_id=${encodeURIComponent(selectedInstanceId)}`,
+        { method: "DELETE" }
+      );
       setRunnerMsg({ type: "ok", text: "已解除绑定" });
     } catch {}
   }
 
   async function handleStart() {
     try {
-      await callRunner("/api/live/runner/start", { method: "POST" });
+      await callRunner("/api/live/runner/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instance_id: selectedInstanceId }),
+      });
       setRunnerMsg({ type: "ok", text: "已启动守护进程" });
     } catch {}
   }
 
   async function handleStop() {
     try {
-      await callRunner("/api/live/runner/stop", { method: "POST" });
+      await callRunner("/api/live/runner/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instance_id: selectedInstanceId }),
+      });
       setRunnerMsg({ type: "ok", text: "已停止守护进程" });
     } catch {}
   }
@@ -314,7 +406,7 @@ export default function LivePage() {
       await callRunner("/api/live/runner/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(cfgDraft),
+        body: JSON.stringify({ ...cfgDraft, instance_id: selectedInstanceId }),
       });
       setRunnerMsg({ type: "ok", text: "已保存风控参数（守护进程下一轮生效）" });
     } catch {}
@@ -322,7 +414,11 @@ export default function LivePage() {
 
   async function handleTickOnce() {
     try {
-      const data = await callRunner("/api/live/runner/tick", { method: "POST" });
+      const data = await callRunner("/api/live/runner/tick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instance_id: selectedInstanceId }),
+      });
       if (data?.skipped) {
         setRunnerMsg({ type: "ok", text: "这根已收盘 K 线已处理过（跳过）" });
       } else {
@@ -361,51 +457,239 @@ export default function LivePage() {
   }, [trades]);
 
   return (
-    <div
-      className="min-h-screen px-4 py-10"
-      style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(0,229,160,0.06) 0%, #0A0A0F 55%)" }}
-    >
-      <div className="max-w-2xl mx-auto">
-        <div className="mb-8">
-          <Link href="/" className="text-sm text-gray-500 hover:text-[#00E5A0] transition-colors">
-            ← 返回首页
-          </Link>
-          <h1 className="text-2xl font-semibold text-white mt-4">实盘 · 币安</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            绑定 API、配置风控、把策略交给守护进程 24 小时跑
+    <PageShell back="/">
+      <div className="mb-8 flex items-end justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight" style={{ color: T.text.primary, letterSpacing: "-0.02em" }}>
+            Live · Multi-account Monitor
+          </h1>
+          <p className="text-sm mt-1" style={{ color: T.text.secondary }}>
+            Create isolated instances (e.g. base / champ), bind a strategy per instance, and monitor signals or paper/live runners.
           </p>
         </div>
+        <Link
+          href="/strategies/square-momentum"
+          className="px-4 py-2 rounded-xl text-xs font-semibold text-white"
+          style={{ background: "linear-gradient(135deg, #3B4EC8, #7C3AED)" }}
+        >
+          View Square Momentum
+        </Link>
+      </div>
 
-        {/* 风险卡片 */}
-        <div className="rounded-2xl p-6 border mb-6" style={{ background: "#16161F", borderColor: "#2A1A1A" }}>
-          <div className="flex items-start gap-2 text-amber-200/90 text-sm leading-relaxed">
-            <span className="shrink-0">⚠️</span>
-            <div>
-              <p className="font-medium text-amber-100/95 mb-1">资金与密钥风险</p>
-              <ul className="list-disc pl-4 space-y-1 text-amber-200/75 text-xs">
-                <li>实盘涉及真实资金，可能产生亏损；本工具不构成投资建议。</li>
-                <li>
-                  在币安创建 <strong>子账户</strong> 并 <strong>关闭提现权限</strong>；API 仅勾选「读取 + 现货交易」。
-                </li>
-                <li>
-                  首次开启建议先用 <strong>模拟模式（paper）</strong>，观察几根 K 线的决策与日志再切到实盘。
-                </li>
-                <li>
-                  密钥保存在服务端 <code className="text-amber-100/90">.live/</code>（已 gitignore）；部署到云上推荐用环境变量。
-                </li>
-              </ul>
-            </div>
+      {/* 多实例监控表 */}
+      <Card className="mb-6">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <h2 className="text-sm font-semibold" style={{ color: T.text.primary }}>Instances</h2>
+          <div className="text-xs" style={{ color: T.text.muted }}>
+            {instanceMonitor.length || 1} total · Current: <span className="font-mono">{selectedInstanceId}</span>
           </div>
         </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead>
+                <tr className="border-b" style={{ borderColor: "rgba(45,53,97,0.08)", color: T.text.muted }}>
+                  <th className="py-2 pr-2">实例</th>
+                  <th className="py-2 pr-2">子账号</th>
+                  <th className="py-2 pr-2">进程</th>
+                  <th className="py-2 pr-2">绑定 session</th>
+                  <th className="py-2 pr-2">PnL / 模式</th>
+                </tr>
+              </thead>
+              <tbody>
+                {instanceMonitor.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-4" style={{ color: T.text.muted }}>
+                      暂无实例；使用默认实例或下方新建。
+                    </td>
+                  </tr>
+                ) : (
+                  instanceMonitor.map((row) => (
+                    <tr key={row.instance_id} className="border-b" style={{ borderColor: "rgba(45,53,97,0.06)" }}>
+                      <td className="py-2 pr-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedInstanceId(row.instance_id)}
+                          className={
+                            selectedInstanceId === row.instance_id
+                              ? "font-medium"
+                              : "hover:opacity-75"
+                          }
+                          style={{ color: selectedInstanceId === row.instance_id ? T.success : T.text.secondary }}
+                        >
+                          {row.label}{" "}
+                          <span style={{ color: T.text.muted }} className="font-mono">({row.instance_id})</span>
+                          {row.legacyRoot && (
+                            <span className="text-[10px] ml-1" style={{ color: "#B45309" }}>legacy</span>
+                          )}
+                        </button>
+                      </td>
+                      <td className="py-2 pr-2 font-mono" style={{ color: T.text.muted }}>
+                        {row.accountId?.slice(0, 12) ?? "—"}
+                      </td>
+                      <td className="py-2 pr-2">
+                        {row.running ? (
+                          <span style={{ color: T.success }}>PID {row.pid}</span>
+                        ) : (
+                          <span style={{ color: T.text.muted }}>Stopped</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-2 max-w-[140px] truncate" style={{ color: T.text.muted }}>
+                        {row.active?.session_id ?? "—"}
+                      </td>
+                      <td className="py-2 pr-2" style={{ color: T.text.secondary }}>
+                        {row.state_summary.total_pnl_usdt != null
+                          ? `${row.state_summary.total_pnl_usdt >= 0 ? "+" : ""}${Number(row.state_summary.total_pnl_usdt).toFixed(2)} `
+                          : "— "}
+                        / {row.state_summary.mode ?? "—"}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-3 items-end">
+            <div>
+              <label className="block text-xs mb-1" style={{ color: T.text.muted }}>Current instance</label>
+              <select
+                value={selectedInstanceId}
+                onChange={(e) => setSelectedInstanceId(e.target.value)}
+                className="rounded-xl px-3 py-2 text-sm outline-none min-w-[180px]"
+                style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
+              >
+                {instanceMonitor.map((r) => (
+                  <option key={r.instance_id} value={r.instance_id}>
+                    {r.label} ({r.instance_id})
+                  </option>
+                ))}
+                {instanceMonitor.length === 0 && (
+                  <option value="default">default</option>
+                )}
+              </select>
+            </div>
+          </div>
+      </Card>
+
+        {/* 子账号登记 + 新建实例 */}
+      <Card className="mb-6">
+          <h2 className="text-sm font-semibold mb-3" style={{ color: T.text.primary }}>Accounts & Instances</h2>
+          <p className="text-xs mb-4" style={{ color: T.text.muted }}>
+            先在币安创建子账户并生成只读+现货 API。此处登记后，可将密钥「推送」到某一运行实例目录供守护进程使用。
+          </p>
+          <div className="grid sm:grid-cols-2 gap-4 mb-4">
+            <div className="rounded-xl p-4 space-y-2" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.08)" }}>
+              <div className="text-xs" style={{ color: T.text.muted }}>Saved accounts</div>
+              <ul className="text-xs space-y-1 max-h-28 overflow-y-auto font-mono" style={{ color: T.text.secondary }}>
+                {accounts.length === 0 ? (
+                  <li style={{ color: T.text.muted }}>None yet</li>
+                ) : (
+                  accounts.map((a) => (
+                    <li key={a.id}>
+                      {a.label} · {a.maskedKey}
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+            <div className="rounded-xl p-4 space-y-2" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.08)" }}>
+              <div className="text-xs" style={{ color: T.text.muted }}>Add an account</div>
+              <AccountAddForm
+                onDone={() => {
+                  loadAccounts();
+                  setMessage({ type: "ok", text: "子账号已保存" });
+                }}
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 items-end">
+            <div>
+              <label className="block text-xs mb-1" style={{ color: T.text.muted }}>New instance id</label>
+              <input
+                value={newInstId}
+                onChange={(e) => setNewInstId(e.target.value.toLowerCase())}
+                className="rounded-xl px-3 py-2 text-sm outline-none w-36"
+                style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: T.text.muted }}>Label</label>
+              <input
+                value={newInstLabel}
+                onChange={(e) => setNewInstLabel(e.target.value)}
+                className="rounded-xl px-3 py-2 text-sm outline-none w-44"
+                style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs mb-1" style={{ color: T.text.muted }}>Account</label>
+              <select
+                value={newInstAccount}
+                onChange={(e) => setNewInstAccount(e.target.value)}
+                className="rounded-xl px-3 py-2 text-sm outline-none min-w-[200px]"
+                style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
+              >
+                <option value="">— 选择 —</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label} ({a.maskedKey})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              disabled={busy || !newInstAccount}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const res = await fetch("/api/live/instances", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      instance_id: newInstId,
+                      label: newInstLabel,
+                      account_id: newInstAccount,
+                    }),
+                  });
+                  const data = await res.json();
+                  if (!res.ok) throw new Error(data.error || "创建失败");
+                  setInstanceMonitor((await (await fetch("/api/live/instances")).json()).instances);
+                  setSelectedInstanceId(newInstId);
+                  setRunnerMsg({ type: "ok", text: `实例 ${newInstId} 已创建` });
+                } catch (e) {
+                  setRunnerMsg({
+                    type: "err",
+                    text: e instanceof Error ? e.message : "创建失败",
+                  });
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className="px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
+              style={{ background: "linear-gradient(135deg, #3B4EC8, #7C3AED)", color: "white" }}
+            >
+              创建实例
+            </button>
+          </div>
+      </Card>
+
+      {/* Risk notice */}
+      <Card className="mb-6" style={{ border: "1px solid rgba(245,158,11,0.22)", background: "rgba(245,158,11,0.04)" }}>
+        <div className="text-sm" style={{ color: "#92400E" }}>
+          <div className="font-semibold mb-1">Risk notice</div>
+          <ul className="list-disc pl-5 text-xs space-y-1" style={{ color: "#B45309" }}>
+            <li>Live trading involves real funds and may incur losses. This tool is not investment advice.</li>
+            <li>Use Binance sub-accounts and disable withdrawals; only enable Read + Spot Trading permissions.</li>
+            <li>Start in paper mode first. Switch to live only after validating logs and behavior.</li>
+          </ul>
+        </div>
+      </Card>
 
         {/* API 凭据 */}
-        <section
-          className="rounded-2xl p-6 border space-y-4 mb-6"
-          style={{ background: "#16161F", borderColor: "#1E1E2E" }}
-        >
-          <h2 className="text-white font-semibold">1. API 凭据</h2>
+      <Card className="space-y-4 mb-6">
+          <h2 className="text-sm font-semibold" style={{ color: T.text.primary }}>1. API Credentials (per instance)</h2>
           {status && (
-            <div className="text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-1">
+          <div className="text-xs flex flex-wrap gap-x-4 gap-y-1" style={{ color: T.text.muted }}>
               <span>
                 状态：{" "}
                 {status.configured ? (
@@ -413,7 +697,7 @@ export default function LivePage() {
                     已配置{status.maskedKey ? `（${status.maskedKey}）` : ""}
                   </span>
                 ) : (
-                  <span className="text-gray-400">未配置</span>
+                  <span style={{ color: T.text.muted }}>未配置</span>
                 )}
               </span>
               {status.source === "env" && (
@@ -423,49 +707,38 @@ export default function LivePage() {
             </div>
           )}
           <div>
-            <label className="block text-gray-400 text-xs mb-1.5">API Key</label>
+            <label className="block text-xs mb-1.5" style={{ color: T.text.muted }}>API Key</label>
             <input
               type="password"
               autoComplete="off"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="粘贴 Binance API Key"
-              className="w-full rounded-xl px-4 py-3 text-white text-sm outline-none"
-              style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+              className="w-full rounded-xl px-4 py-3 text-sm outline-none"
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
             />
           </div>
           <div>
-            <label className="block text-gray-400 text-xs mb-1.5">Secret Key</label>
+            <label className="block text-xs mb-1.5" style={{ color: T.text.muted }}>Secret Key</label>
             <input
               type="password"
               autoComplete="new-password"
               value={apiSecret}
               onChange={(e) => setApiSecret(e.target.value)}
               placeholder="粘贴 Secret"
-              className="w-full rounded-xl px-4 py-3 text-white text-sm outline-none"
-              style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+              className="w-full rounded-xl px-4 py-3 text-sm outline-none"
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
             />
           </div>
-          <label className="flex items-start gap-2 cursor-pointer text-sm text-gray-400">
+          <label className="flex items-start gap-2 cursor-pointer text-sm" style={{ color: T.text.muted }}>
             <input type="checkbox" checked={riskOk} onChange={(e) => setRiskOk(e.target.checked)} className="mt-0.5" />
             <span>我已阅读上述风险提示，并自行承担实盘风险</span>
           </label>
-          {message && (
-            <p
-              className="text-sm rounded-lg px-3 py-2"
-              style={
-                message.type === "ok"
-                  ? { color: "#00E5A0", background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)" }
-                  : { color: "#FF6B8A", background: "rgba(255,77,106,0.08)", border: "1px solid rgba(255,77,106,0.2)" }
-              }
-            >
-              {message.text}
-            </p>
-          )}
+          {message && <Alert type={message.type} text={message.text} />}
           {testResult && (
-            <div className="text-sm rounded-xl px-4 py-3" style={{ background: "#0A0A0F", border: "1px solid #1E1E2E" }}>
-              <p className="text-gray-400 mb-1">现货余额（只读）</p>
-              <p className="text-white">USDT：{testResult.usdt ?? "—"} · BTC：{testResult.btc ?? "—"}</p>
+            <div className="text-sm rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.08)" }}>
+              <p className="mb-1 text-xs" style={{ color: T.text.muted }}>Spot balance (read-only)</p>
+              <p style={{ color: T.text.primary }}>USDT: {testResult.usdt ?? "—"} · BTC: {testResult.btc ?? "—"}</p>
             </div>
           )}
           <div className="flex flex-wrap gap-3 pt-1">
@@ -473,8 +746,8 @@ export default function LivePage() {
               type="button"
               onClick={handleSave}
               disabled={loading}
-              className="px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
-              style={{ background: "linear-gradient(135deg, #00E5A0, #00C080)", color: "#0A0A0F" }}
+              className="px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50 text-white"
+              style={{ background: "linear-gradient(135deg, #3B4EC8, #7C3AED)" }}
             >
               {loading ? "处理中…" : "保存 API"}
             </button>
@@ -482,8 +755,8 @@ export default function LivePage() {
               type="button"
               onClick={handleTest}
               disabled={testing}
-              className="px-5 py-2 rounded-xl text-sm font-medium border disabled:opacity-50"
-              style={{ background: "#1E1E2E", borderColor: "#2E2E3E", color: "#E0E0E8" }}
+              className="px-5 py-2 rounded-xl text-sm font-medium disabled:opacity-50"
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.secondary }}
             >
               {testing ? "测试中…" : "测试连接"}
             </button>
@@ -491,38 +764,40 @@ export default function LivePage() {
               type="button"
               onClick={handleClear}
               disabled={loading}
-              className="px-4 py-2 rounded-xl text-sm text-gray-500 hover:text-red-300 transition-colors"
+              className="px-4 py-2 rounded-xl text-sm transition-opacity hover:opacity-70 disabled:opacity-50"
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.secondary }}
             >
-              清除本地凭据
+              Clear credentials
             </button>
           </div>
-        </section>
+      </Card>
 
         {/* 绑定策略 */}
-        <section
-          className="rounded-2xl p-6 border space-y-4 mb-6"
-          style={{ background: "#16161F", borderColor: "#1E1E2E" }}
-        >
-          <h2 className="text-white font-semibold">2. 绑定策略</h2>
+      <Card className="space-y-4 mb-6">
+          <h2 className="text-sm font-semibold" style={{ color: T.text.primary }}>2. Bind a Strategy</h2>
           <p className="text-xs text-gray-500 leading-relaxed">
             先在首页生成/进化一个策略，复制 URL 里的 <code className="text-gray-400">id=sess_xxx</code> 粘贴到下方；
             也可勾选「使用进化冠军」来跑进化后的冠军策略。
           </p>
           {runner?.active ? (
-            <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "#0A0A0F", border: "1px solid #1E1E2E" }}>
-              <p className="text-[#00E5A0] font-medium">已绑定</p>
-              <p className="text-gray-400 text-xs mt-1 break-all">
+            <div
+              className="rounded-xl px-4 py-3 text-sm"
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.08)" }}
+            >
+              <p className="font-medium" style={{ color: T.success }}>Bound</p>
+              <p className="text-xs mt-1 break-all" style={{ color: T.text.muted }}>
                 session：{runner.active.session_id} · timeframe：{runner.active.timeframe}
               </p>
               {runner.active.summary && (
-                <p className="text-gray-500 text-xs mt-1 line-clamp-2">{runner.active.summary}</p>
+                <p className="text-xs mt-1 line-clamp-2" style={{ color: T.text.secondary }}>{runner.active.summary}</p>
               )}
-              <p className="text-gray-600 text-xs mt-1">绑定时间：{runner.active.bound_at}</p>
+              <p className="text-xs mt-1" style={{ color: T.text.muted }}>Bound at: {runner.active.bound_at}</p>
               <button
                 type="button"
                 onClick={handleUnbind}
                 disabled={busy}
-                className="mt-3 text-xs text-gray-500 hover:text-red-300 transition-colors"
+                className="mt-3 text-xs transition-opacity hover:opacity-70 disabled:opacity-50"
+                style={{ color: T.danger }}
               >
                 解除绑定
               </button>
@@ -530,7 +805,7 @@ export default function LivePage() {
           ) : sessions.length === 0 ? (
             <div
               className="rounded-xl px-4 py-6 text-center text-sm text-gray-500"
-              style={{ background: "#0A0A0F", border: "1px dashed #1E1E2E" }}
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px dashed rgba(45,53,97,0.18)", color: T.text.muted }}
             >
               还没有策略会话。先到首页生成一个策略，再回来绑定。
             </div>
@@ -546,33 +821,33 @@ export default function LivePage() {
                       onClick={() => setSessionId(s.session_id)}
                       className="w-full text-left rounded-xl px-4 py-3 transition-colors"
                       style={{
-                        background: selected ? "rgba(0,229,160,0.08)" : "#0A0A0F",
-                        border: selected ? "1px solid rgba(0,229,160,0.35)" : "1px solid #1E1E2E",
+                        background: selected ? "rgba(59,78,200,0.06)" : "rgba(255,255,255,0.85)",
+                        border: selected ? "1px solid rgba(59,78,200,0.22)" : "1px solid rgba(45,53,97,0.08)",
                       }}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <div className="text-white text-sm truncate">
+                          <div className="text-sm truncate" style={{ color: T.text.primary }}>
                             {s.user_input || s.strategy_summary || s.session_id}
                           </div>
-                          <div className="text-gray-500 text-xs mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                          <div className="text-xs mt-1 flex flex-wrap gap-x-3 gap-y-0.5" style={{ color: T.text.muted }}>
                             <span className="font-mono">{s.session_id.slice(0, 20)}…</span>
-                            {s.timeframe && <span>周期 {s.timeframe}</span>}
+                            {s.timeframe && <span>TF {s.timeframe}</span>}
                             {typeof s.user_sharpe === "number" && <span>Sharpe {s.user_sharpe.toFixed(2)}</span>}
                             {s.has_champion && (
-                              <span className="text-[#00E5A0]">
-                                含冠军{typeof s.champion_sharpe === "number" ? ` · Sharpe ${s.champion_sharpe.toFixed(2)}` : ""}
+                              <span style={{ color: T.success }}>
+                                Has champion{typeof s.champion_sharpe === "number" ? ` · Sharpe ${s.champion_sharpe.toFixed(2)}` : ""}
                               </span>
                             )}
                           </div>
                         </div>
-                        {selected && <span className="text-[#00E5A0] text-xs shrink-0">✓</span>}
+                        {selected && <span className="text-xs shrink-0" style={{ color: "#3B4EC8" }}>✓</span>}
                       </div>
                     </button>
                   );
                 })}
               </div>
-              <label className="flex items-center gap-2 text-xs text-gray-400">
+              <label className="flex items-center gap-2 text-xs" style={{ color: T.text.muted }}>
                 <input
                   type="checkbox"
                   checked={useChampion}
@@ -580,9 +855,9 @@ export default function LivePage() {
                   disabled={!sessionId || !sessions.find((s) => s.session_id === sessionId)?.has_champion}
                 />
                 <span>
-                  使用进化冠军
+                  Use champion strategy
                   {sessionId && !sessions.find((s) => s.session_id === sessionId)?.has_champion && (
-                    <span className="text-gray-600">（该会话无冠军）</span>
+                    <span style={{ color: T.text.muted }}> (no champion)</span>
                   )}
                 </span>
               </label>
@@ -592,60 +867,58 @@ export default function LivePage() {
                   onClick={handleBind}
                   disabled={busy || !sessionId}
                   className="px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
-                  style={{ background: "linear-gradient(135deg, #00E5A0, #00C080)", color: "#0A0A0F" }}
+                  style={{ background: "linear-gradient(135deg, #3B4EC8, #7C3AED)", color: "white" }}
                 >
-                  绑定选中的策略
+                  Bind selected
                 </button>
                 <button
                   type="button"
                   onClick={loadSessions}
-                  className="px-3 py-2 rounded-xl text-xs text-gray-500 hover:text-white transition-colors"
+                  className="px-3 py-2 rounded-xl text-xs transition-opacity hover:opacity-70"
+                  style={{ color: T.text.secondary, background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)" }}
                 >
-                  刷新列表
+                  Refresh
                 </button>
               </div>
             </>
           )}
-        </section>
+      </Card>
 
         {/* 风控 + 启停 */}
-        <section
-          className="rounded-2xl p-6 border space-y-4 mb-6"
-          style={{ background: "#16161F", borderColor: "#1E1E2E" }}
-        >
+      <Card className="space-y-4 mb-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-white font-semibold">3. 守护进程</h2>
+          <h2 className="text-sm font-semibold" style={{ color: T.text.primary }}>3. Runner</h2>
             <StatusBadge running={!!runner?.running} state={runner?.state} />
           </div>
 
           {cfgDraft && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-gray-400 text-xs mb-1.5">模式</label>
+                <label className="block text-xs mb-1.5" style={{ color: T.text.muted }}>Mode</label>
                 <select
                   value={cfgDraft.mode}
                   onChange={(e) => setCfgDraft({ ...cfgDraft, mode: e.target.value as "paper" | "live" })}
-                  className="w-full rounded-xl px-3 py-2 text-white text-sm outline-none"
-                  style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+                  className="w-full rounded-xl px-3 py-2 text-sm outline-none"
+                  style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
                 >
                   <option value="paper">paper（模拟下单，只记录）</option>
                   <option value="live">live（真实下单，真金白银）</option>
                 </select>
               </div>
               <div>
-                <label className="block text-gray-400 text-xs mb-1.5">单笔最大（USDT）</label>
+                <label className="block text-xs mb-1.5" style={{ color: T.text.muted }}>Max order (USDT)</label>
                 <input
                   type="number"
                   min={5}
                   step={1}
                   value={cfgDraft.max_order_usdt}
                   onChange={(e) => setCfgDraft({ ...cfgDraft, max_order_usdt: Number(e.target.value) })}
-                  className="w-full rounded-xl px-3 py-2 text-white text-sm outline-none"
-                  style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+                  className="w-full rounded-xl px-3 py-2 text-sm outline-none"
+                  style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
                 />
               </div>
               <div>
-                <label className="block text-gray-400 text-xs mb-1.5">止损（小数，0.05 = 5%）</label>
+                <label className="block text-xs mb-1.5" style={{ color: T.text.muted }}>Stop loss</label>
                 <input
                   type="number"
                   min={0}
@@ -653,12 +926,12 @@ export default function LivePage() {
                   step={0.01}
                   value={cfgDraft.stop_loss_pct}
                   onChange={(e) => setCfgDraft({ ...cfgDraft, stop_loss_pct: Number(e.target.value) })}
-                  className="w-full rounded-xl px-3 py-2 text-white text-sm outline-none"
-                  style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+                  className="w-full rounded-xl px-3 py-2 text-sm outline-none"
+                  style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
                 />
               </div>
               <div>
-                <label className="block text-gray-400 text-xs mb-1.5">止盈（小数，0 = 关）</label>
+                <label className="block text-xs mb-1.5" style={{ color: T.text.muted }}>Take profit</label>
                 <input
                   type="number"
                   min={0}
@@ -666,12 +939,12 @@ export default function LivePage() {
                   step={0.01}
                   value={cfgDraft.take_profit_pct}
                   onChange={(e) => setCfgDraft({ ...cfgDraft, take_profit_pct: Number(e.target.value) })}
-                  className="w-full rounded-xl px-3 py-2 text-white text-sm outline-none"
-                  style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+                  className="w-full rounded-xl px-3 py-2 text-sm outline-none"
+                  style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
                 />
               </div>
               <div className="col-span-2">
-                <label className="block text-gray-400 text-xs mb-1.5">轮询间隔（秒，≥15）</label>
+                <label className="block text-xs mb-1.5" style={{ color: T.text.muted }}>Tick interval (sec)</label>
                 <input
                   type="number"
                   min={15}
@@ -679,8 +952,8 @@ export default function LivePage() {
                   step={5}
                   value={cfgDraft.tick_seconds}
                   onChange={(e) => setCfgDraft({ ...cfgDraft, tick_seconds: Number(e.target.value) })}
-                  className="w-full rounded-xl px-3 py-2 text-white text-sm outline-none"
-                  style={{ background: "#0A0A0F", border: "1.5px solid #1E1E2E" }}
+                  className="w-full rounded-xl px-3 py-2 text-sm outline-none"
+                  style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
                 />
               </div>
             </div>
@@ -692,7 +965,7 @@ export default function LivePage() {
               onClick={handleSaveConfig}
               disabled={busy}
               className="px-4 py-2 rounded-xl text-sm font-medium border disabled:opacity-50"
-              style={{ background: "#1E1E2E", borderColor: "#2E2E3E", color: "#E0E0E8" }}
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.secondary }}
             >
               保存参数
             </button>
@@ -712,7 +985,7 @@ export default function LivePage() {
                 onClick={handleStart}
                 disabled={busy}
                 className="px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
-                style={{ background: "linear-gradient(135deg, #00E5A0, #00C080)", color: "#0A0A0F" }}
+                style={{ background: "linear-gradient(135deg, #3B4EC8, #7C3AED)", color: "white" }}
               >
                 启动
               </button>
@@ -721,8 +994,9 @@ export default function LivePage() {
               type="button"
               onClick={handleTickOnce}
               disabled={busy}
-              className="px-4 py-2 rounded-xl text-sm text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+              className="px-4 py-2 rounded-xl text-sm transition-opacity hover:opacity-70 disabled:opacity-50"
               title="立刻跑一次策略 tick（不依赖守护进程是否运行，可用于调试）"
+              style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.secondary }}
             >
               立即执行一次
             </button>
@@ -740,15 +1014,12 @@ export default function LivePage() {
               {runnerMsg.text}
             </p>
           )}
-        </section>
+      </Card>
 
         {/* 运行状态 */}
         {runner && (
-          <section
-            className="rounded-2xl p-6 border space-y-4 mb-6"
-            style={{ background: "#16161F", borderColor: "#1E1E2E" }}
-          >
-            <h2 className="text-white font-semibold">4. 实时状态</h2>
+          <Card className="space-y-4 mb-6">
+          <h2 className="text-sm font-semibold" style={{ color: T.text.primary }}>4. Runtime status</h2>
 
             <div className="grid grid-cols-2 gap-3 text-sm">
               <Stat label="PID" value={runner.pid ?? "—"} />
@@ -816,51 +1087,53 @@ export default function LivePage() {
                 ⚠ {runner.state.error}
               </p>
             )}
-          </section>
+          </Card>
         )}
 
         {/* 收益曲线 + 交易记录 */}
         {trades.length > 0 && (
-          <section
-            className="rounded-2xl p-6 border space-y-4 mb-6"
-            style={{ background: "#16161F", borderColor: "#1E1E2E" }}
-          >
+          <Card className="space-y-4 mb-6">
             <div className="flex items-center justify-between">
-              <h2 className="text-white font-semibold">5. 收益</h2>
-              <span className="text-xs text-gray-500">共 {trades.length} 笔交易</span>
+              <h2 className="text-sm font-semibold" style={{ color: T.text.primary }}>5. Performance</h2>
+              <span className="text-xs" style={{ color: T.text.muted }}>Trades: {trades.length}</span>
             </div>
 
             <div style={{ height: 240 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1E1E2E" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(45,53,97,0.08)" />
                   <XAxis
                     dataKey="label"
-                    tick={{ fill: "#8E8EA0", fontSize: 10 }}
-                    stroke="#2E2E3E"
+                    tick={{ fill: T.text.muted, fontSize: 10 }}
+                    stroke="rgba(45,53,97,0.18)"
                     interval="preserveStartEnd"
                   />
                   <YAxis
-                    tick={{ fill: "#8E8EA0", fontSize: 10 }}
-                    stroke="#2E2E3E"
+                    tick={{ fill: T.text.muted, fontSize: 10 }}
+                    stroke="rgba(45,53,97,0.18)"
                     tickFormatter={(v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`}
                   />
                   <Tooltip
-                    contentStyle={{ background: "#0A0A0F", border: "1px solid #1E1E2E", borderRadius: 8 }}
-                    labelStyle={{ color: "#8E8EA0", fontSize: 11 }}
-                    itemStyle={{ color: "#00E5A0", fontSize: 12 }}
+                    contentStyle={{
+                      background: "rgba(255,255,255,0.95)",
+                      border: "1px solid rgba(45,53,97,0.12)",
+                      borderRadius: 10,
+                      boxShadow: "0 6px 18px rgba(31,41,64,0.08)",
+                    }}
+                    labelStyle={{ color: T.text.secondary as any, fontSize: 11 }}
+                    itemStyle={{ color: T.text.primary as any, fontSize: 12 }}
                     formatter={(v) => {
                       const n = typeof v === "number" ? v : 0;
                       return [`${n >= 0 ? "+" : ""}${n.toFixed(4)} USDT`, "累计盈亏"];
                     }}
                   />
-                  <ReferenceLine y={0} stroke="#2E2E3E" strokeDasharray="2 2" />
+                  <ReferenceLine y={0} stroke="rgba(45,53,97,0.18)" strokeDasharray="2 2" />
                   <Line
                     type="monotone"
                     dataKey="cumulative"
-                    stroke="#00E5A0"
+                    stroke="#3B4EC8"
                     strokeWidth={2}
-                    dot={{ r: 3, fill: "#00E5A0" }}
+                    dot={{ r: 3, fill: "#3B4EC8" }}
                     activeDot={{ r: 5 }}
                     isAnimationActive={false}
                   />
@@ -871,7 +1144,7 @@ export default function LivePage() {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-gray-500 border-b" style={{ borderColor: "#1E1E2E" }}>
+                  <tr className="border-b" style={{ borderColor: "rgba(45,53,97,0.08)", color: T.text.muted }}>
                     <th className="text-left py-2 px-2 font-normal">平仓时间</th>
                     <th className="text-right py-2 px-2 font-normal">入场</th>
                     <th className="text-right py-2 px-2 font-normal">出场</th>
@@ -889,19 +1162,19 @@ export default function LivePage() {
                     .map((t, i) => {
                       const pnlColor = t.pnl_usdt > 0 ? "#00E5A0" : t.pnl_usdt < 0 ? "#FF6B8A" : "#8E8EA0";
                       return (
-                        <tr key={i} className="border-b" style={{ borderColor: "#15151E" }}>
-                          <td className="py-2 px-2 text-gray-400 font-mono">
+                        <tr key={i} className="border-b" style={{ borderColor: "rgba(45,53,97,0.06)" }}>
+                          <td className="py-2 px-2 font-mono" style={{ color: T.text.muted }}>
                             {t.exit_ts?.slice(0, 16).replace("T", " ") || "—"}
                           </td>
-                          <td className="py-2 px-2 text-right text-gray-400">${t.entry_price.toFixed(2)}</td>
-                          <td className="py-2 px-2 text-right text-gray-400">${t.exit_price.toFixed(2)}</td>
-                          <td className="py-2 px-2 text-right text-gray-500 font-mono">{t.qty.toFixed(6)}</td>
+                          <td className="py-2 px-2 text-right" style={{ color: T.text.secondary }}>${t.entry_price.toFixed(2)}</td>
+                          <td className="py-2 px-2 text-right" style={{ color: T.text.secondary }}>${t.exit_price.toFixed(2)}</td>
+                          <td className="py-2 px-2 text-right font-mono" style={{ color: T.text.muted }}>{t.qty.toFixed(6)}</td>
                           <td className="py-2 px-2 text-right font-mono" style={{ color: pnlColor }}>
                             {t.pnl_usdt >= 0 ? "+" : ""}
                             {t.pnl_usdt.toFixed(2)} ({t.pnl_pct >= 0 ? "+" : ""}
                             {t.pnl_pct.toFixed(2)}%)
                           </td>
-                          <td className="py-2 px-2 text-right font-mono text-gray-300">
+                          <td className="py-2 px-2 text-right font-mono" style={{ color: T.text.primary }}>
                             {t.cumulative_pnl >= 0 ? "+" : ""}
                             {t.cumulative_pnl.toFixed(2)}
                           </td>
@@ -909,14 +1182,14 @@ export default function LivePage() {
                             <span
                               className="text-[10px] px-1.5 py-0.5 rounded"
                               style={{
-                                background: t.mode === "live" ? "rgba(255,107,138,0.1)" : "rgba(143,184,255,0.1)",
+                                background: t.mode === "live" ? "rgba(220,38,38,0.08)" : "rgba(59,78,200,0.08)",
                                 color: t.mode === "live" ? "#FF6B8A" : "#8FB8FF",
                               }}
                             >
                               {t.mode}
                             </span>
                             {t.forced && (
-                              <span className="ml-1 text-[10px] text-amber-300">{t.forced}</span>
+                              <span className="ml-1 text-[10px]" style={{ color: "#B45309" }}>{t.forced}</span>
                             )}
                           </td>
                         </tr>
@@ -925,19 +1198,16 @@ export default function LivePage() {
                 </tbody>
               </table>
               {trades.length > 30 && (
-                <p className="text-xs text-gray-600 text-center mt-2">仅显示最近 30 笔</p>
+                <p className="text-xs text-center mt-2" style={{ color: T.text.muted }}>Showing last 30 trades</p>
               )}
             </div>
-          </section>
+          </Card>
         )}
 
         {/* 事件 */}
         {runner?.events && runner.events.length > 0 && (
-          <section
-            className="rounded-2xl p-6 border space-y-3 mb-10"
-            style={{ background: "#16161F", borderColor: "#1E1E2E" }}
-          >
-            <h2 className="text-white font-semibold">6. 最近事件</h2>
+          <Card className="space-y-3 mb-10">
+            <h2 className="text-sm font-semibold" style={{ color: T.text.primary }}>6. Recent events</h2>
             <div className="space-y-1 max-h-96 overflow-y-auto font-mono text-xs leading-relaxed">
               {runner.events
                 .slice()
@@ -946,9 +1216,71 @@ export default function LivePage() {
                   <EventLine key={i} ev={ev} />
                 ))}
             </div>
-          </section>
+          </Card>
         )}
-      </div>
+    </PageShell>
+  );
+}
+
+function AccountAddForm({ onDone }: { onDone: () => void }) {
+  const [label, setLabel] = useState("子账号");
+  const [k, setK] = useState("");
+  const [s, setS] = useState("");
+  const [loading, setLoading] = useState(false);
+  return (
+    <div className="space-y-2">
+      <input
+        placeholder="备注名"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        className="w-full rounded-lg px-2 py-1.5 text-xs outline-none"
+        style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
+      />
+      <input
+        placeholder="API Key"
+        type="password"
+        value={k}
+        onChange={(e) => setK(e.target.value)}
+        className="w-full rounded-lg px-2 py-1.5 text-xs outline-none font-mono"
+        style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
+      />
+      <input
+        placeholder="Secret"
+        type="password"
+        value={s}
+        onChange={(e) => setS(e.target.value)}
+        className="w-full rounded-lg px-2 py-1.5 text-xs outline-none font-mono"
+        style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.1)", color: T.text.primary }}
+      />
+      <button
+        type="button"
+        disabled={loading || !k.trim() || !s.trim()}
+        onClick={async () => {
+          setLoading(true);
+          try {
+            const res = await fetch("/api/live/accounts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ label, apiKey: k, apiSecret: s }),
+            });
+            if (!res.ok) {
+              const d = await res.json();
+              throw new Error(d.error || "失败");
+            }
+            setK("");
+            setS("");
+            onDone();
+          } catch {
+            /* parent may show toast */
+          } finally {
+            setLoading(false);
+          }
+        }}
+        className="w-full py-1.5 rounded-lg text-xs font-medium text-white"
+        style={{ background: "linear-gradient(135deg, #3B4EC8, #7C3AED)" }}
+      >
+        {loading ? "…" : "登记"}
+      </button>
     </div>
   );
 }
@@ -964,11 +1296,11 @@ function Stat({
   hi?: boolean;
   lo?: boolean;
 }) {
-  const color = hi ? "text-[#00E5A0]" : lo ? "text-[#FF6B8A]" : "text-white";
+  const color = hi ? T.success : lo ? T.danger : T.text.primary;
   return (
-    <div className="rounded-xl px-3 py-2.5" style={{ background: "#0A0A0F", border: "1px solid #1E1E2E" }}>
-      <div className="text-gray-500 text-xs">{label}</div>
-      <div className={`text-sm mt-0.5 ${color}`}>{value}</div>
+    <div className="rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.85)", border: "1px solid rgba(45,53,97,0.08)" }}>
+      <div className="text-xs" style={{ color: T.text.muted }}>{label}</div>
+      <div className="text-sm mt-0.5" style={{ color }}>{value}</div>
     </div>
   );
 }

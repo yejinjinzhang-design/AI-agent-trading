@@ -15,6 +15,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from ..models import PostInteractionSnapshot, ScraperError, SquarePost
+from ..ticker_resolver import resolve_post_tickers
 
 logger = logging.getLogger(__name__)
 
@@ -335,10 +336,30 @@ class BinanceSquareScraper:
 
         # tradingPairs：list[str] 或 list[dict{symbol,...}]
         trading_pairs_raw = vo.get("tradingPairs") or []
+        trading_pairs: list[str] = []
         if trading_pairs_raw and isinstance(trading_pairs_raw[0], dict):
-            tp_val = json.dumps([t.get("symbol", t.get("pair", "")) for t in trading_pairs_raw], ensure_ascii=False)
+            trading_pairs = [t.get("symbol", t.get("pair", "")) for t in trading_pairs_raw]
         else:
-            tp_val = json.dumps(trading_pairs_raw, ensure_ascii=False)
+            trading_pairs = list(trading_pairs_raw)
+
+        # 小币帖子有时没有 tradingPairs，但 raw_json / 正文里有 tradingPairsV2、coinPairList 或 "$TOKEN"
+        if not trading_pairs:
+            resolved = resolve_post_tickers(
+                post_id=post_id,
+                content_raw=vo.get("content", ""),
+                raw_json=json.dumps(vo, ensure_ascii=False, default=str),
+            )
+            trading_pairs = [x.ticker for x in resolved]
+
+        # de-dup while keeping order
+        dedup_pairs: list[str] = []
+        seen_pairs: set[str] = set()
+        for sym in trading_pairs:
+            if not sym or sym in seen_pairs:
+                continue
+            seen_pairs.add(sym)
+            dedup_pairs.append(sym)
+        tp_val = json.dumps(dedup_pairs, ensure_ascii=False)
 
         now = _utcnow()
         existing = self.session.query(SquarePost).filter_by(post_id=post_id).first()

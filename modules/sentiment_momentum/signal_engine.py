@@ -70,6 +70,17 @@ class SignalConfig:
 
     # 噪音过滤（部分匹配，"USDT" 太宽泛不能放这里）
     NOISE_TICKER_PATTERNS: list[str] = ["人生", "币安人生", "跑路", "暴富", "空投"]
+    # 常驻热门大币：只用于市场背景，不作为“小币异动”交易候选
+    EXCLUDED_CANDIDATE_SYMBOLS: set[str] = frozenset({"BTCUSDT", "ETHUSDT"})
+
+    # 小币异动捕捉：允许候选来自短周期涨跌榜，而不只来自社交热度
+    SHORT_MOVER_RANKING_TYPES: set[str] = frozenset({
+        "gainers_5m",
+        "losers_5m",
+        "volume_5m",
+    })
+    RECENT_RANKING_ENTRY_MINUTES: int = 20
+    MAX_CANDIDATES: int = 60
 
     STRATEGY_VERSION: str = "v0.1-paper"
 
@@ -166,6 +177,8 @@ def _clamp(val: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 def _is_noise_ticker(ticker: str) -> bool:
     """过滤非合约 ticker（如"币安人生USDT"等）"""
+    if ticker in cfg.EXCLUDED_CANDIDATE_SYMBOLS:
+        return True
     for pattern in cfg.NOISE_TICKER_PATTERNS:
         if pattern in ticker:
             return True
@@ -286,9 +299,9 @@ def _compute_ranking(session: Session, symbol: str) -> RankingDimension:
         dim.ranking_types.append(rtype)
         dim.min_rank = min(dim.min_rank, rank)
 
-        if rtype == "gainers":
+        if rtype in ("gainers", "gainers_5m"):
             dim.has_gainers = True
-        elif rtype == "volume":
+        elif rtype in ("volume", "volume_5m"):
             dim.has_volume = True
         elif rtype == "funding_low":
             dim.has_funding_low = True
@@ -311,6 +324,8 @@ def _compute_ranking(session: Session, symbol: str) -> RankingDimension:
         bull_bonus += 0.15    # 多头未透支 = 正向信号
     if dim.has_funding_high:
         bull_bonus -= 0.1     # 资金费率极高 = 多头过热，适当降权
+    if "gainers_5m" in dim.ranking_types or "volume_5m" in dim.ranking_types:
+        bull_bonus += 0.15    # 短周期异动比 24h 榜更适合捕捉新爆发
 
     dim.score = _clamp(base * rank_factor + bull_bonus)
     return dim
@@ -484,9 +499,10 @@ def _check_direction_ranking_consistency(
 
     返回 (is_consistent, reason_if_not)
     """
+    has_losers = "losers" in ranking.ranking_types or "losers_5m" in ranking.ranking_types
     if ranking.has_gainers and direction == "short":
         return False, "direction_conflict:gainers_but_short"
-    if ranking.has_gainers is False and "losers" in ranking.ranking_types and direction == "long":
+    if ranking.has_gainers is False and has_losers and direction == "long":
         return False, "direction_conflict:losers_but_long"
     return True, ""
 
@@ -628,16 +644,15 @@ class SignalEngine:
 
     def get_candidates(self) -> list[str]:
         """
-        从近 SOCIAL_WINDOW_MINUTES 分钟的社交帖子中提取候选币种：
-        - mention_count >= MIN_MENTIONS
-        - unique_authors >= MIN_UNIQUE_AUTHORS
-        - 在 futures_universe（TRADING）中
-        - 不在排除 tier 列表
-        - 不是噪音 ticker
+        候选来源合并：
+        - 近 SOCIAL_WINDOW_MINUTES 分钟社交热度
+        - 最新短周期榜单（gainers_5m / losers_5m / volume_5m）
+        - 最近 RECENT_RANKING_ENTRY_MINUTES 分钟新进榜事件
         """
         cutoff = _utcnow() - timedelta(minutes=cfg.SOCIAL_WINDOW_MINUTES)
+        entry_cutoff = _utcnow() - timedelta(minutes=cfg.RECENT_RANKING_ENTRY_MINUTES)
 
-        rows = self.session.execute(text("""
+        social_rows = self.session.execute(text("""
             WITH social_agg AS (
                 SELECT je.value as ticker,
                        COUNT(*) as mentions,
@@ -656,18 +671,52 @@ class SignalEngine:
             WHERE u.status = 'TRADING'
               AND (u.volume_tier IS NULL OR u.volume_tier NOT IN ('tier_4_tiny'))
             ORDER BY s.heat DESC
-            LIMIT 30
+            LIMIT :limit
         """), {
             "cutoff": cutoff,
             "min_m": cfg.MIN_MENTIONS,
             "min_a": cfg.MIN_UNIQUE_AUTHORS,
+            "limit": cfg.MAX_CANDIDATES,
         }).fetchall()
 
-        candidates = []
-        for r in rows:
-            ticker = r[0]
-            if not _is_noise_ticker(ticker):
+        ranking_rows = self.session.execute(text("""
+            SELECT DISTINCT r.symbol
+            FROM ranking_snapshots r
+            INNER JOIN futures_universe u ON u.symbol = r.symbol
+            WHERE r.snapshot_at = (SELECT MAX(snapshot_at) FROM ranking_snapshots)
+              AND r.ranking_type IN ('gainers_5m', 'losers_5m', 'volume_5m', 'gainers', 'losers')
+              AND u.status = 'TRADING'
+              AND (u.volume_tier IS NULL OR u.volume_tier NOT IN ('tier_4_tiny'))
+            ORDER BY r.rank ASC
+            LIMIT :limit
+        """), {"limit": cfg.MAX_CANDIDATES}).fetchall()
+
+        entry_rows = self.session.execute(text("""
+            SELECT DISTINCT e.symbol
+            FROM ranking_entry_events e
+            INNER JOIN futures_universe u ON u.symbol = e.symbol
+            WHERE e.entered_at >= :cutoff
+              AND e.exited_at IS NULL
+              AND e.ranking_type IN ('gainers_5m', 'losers_5m', 'volume_5m', 'gainers', 'losers')
+              AND u.status = 'TRADING'
+              AND (u.volume_tier IS NULL OR u.volume_tier NOT IN ('tier_4_tiny'))
+            ORDER BY e.entered_at DESC
+            LIMIT :limit
+        """), {"cutoff": entry_cutoff, "limit": cfg.MAX_CANDIDATES}).fetchall()
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for rows in (ranking_rows, entry_rows, social_rows):
+            for r in rows:
+                ticker = r[0]
+                if ticker in seen or _is_noise_ticker(ticker):
+                    continue
+                seen.add(ticker)
                 candidates.append(ticker)
+                if len(candidates) >= cfg.MAX_CANDIDATES:
+                    break
+            if len(candidates) >= cfg.MAX_CANDIDATES:
+                break
 
         logger.info(f"[signal_engine] 候选 symbol: {len(candidates)} 个 → {candidates}")
         return candidates
@@ -713,10 +762,10 @@ class SignalEngine:
         # ── 微调 2：综合分绝对门槛
         if composite < cfg.MIN_COMPOSITE_SCORE:
             _persist_rejected_signal(
-                session, symbol, signal_type, composite,
+                self.session, symbol, signal_type, composite,
                 reject_reason="below_threshold",
                 detail=f"composite={composite:.3f} < MIN={cfg.MIN_COMPOSITE_SCORE}",
-                price=_get_latest_price(session, symbol),
+                price=_get_latest_price(self.session, symbol),
             )
             return None
 
@@ -725,14 +774,14 @@ class SignalEngine:
             symbol, signal_type, ranking
         )
         if not consistent:
-            fu_row2 = session.execute(text(
+            fu_row2 = self.session.execute(text(
                 "SELECT volume_tier FROM futures_universe WHERE symbol=:sym"
             ), {"sym": symbol}).fetchone()
             _persist_rejected_signal(
-                session, symbol, signal_type, composite,
+                self.session, symbol, signal_type, composite,
                 reject_reason="direction_conflict",
                 detail=conflict_reason,
-                price=_get_latest_price(session, symbol),
+                price=_get_latest_price(self.session, symbol),
                 volume_tier=fu_row2[0] if fu_row2 else None,
                 on_rankings=ranking.ranking_types,
             )

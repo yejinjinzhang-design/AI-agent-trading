@@ -5,6 +5,7 @@ from pathlib import Path
 _MODULE_DIR = Path(__file__).parent
 
 class CollectorConfig:
+    LOG_DIR: Path = _MODULE_DIR / "logs"
     # 数据库（相对于模块目录）
     DB_PATH = os.getenv(
         "SENTIMENT_DB_PATH",
@@ -13,23 +14,24 @@ class CollectorConfig:
 
     # 广场抓取
     SCRAPE_INTERVAL_SQUARE_HOT = 120        # 2 分钟
-    SCRAPE_INTERVAL_SQUARE_LATEST = 30      # 30 秒
+    SCRAPE_INTERVAL_SQUARE_LATEST = 20      # 20 秒
     SCRAPE_COUNT_SQUARE_HOT = 50
     SCRAPE_COUNT_SQUARE_LATEST = 30
 
     # 合约榜单
-    SCRAPE_INTERVAL_RANKINGS = 300          # 5 分钟
+    SCRAPE_INTERVAL_RANKINGS = 60           # 1 分钟
     RANKING_TOP_N = 20
+    SHORT_MOVER_TOP_N = 30
 
     # 价格数据
     SCRAPE_INTERVAL_KLINE_1H = 3600
-    SCRAPE_INTERVAL_KLINE_5M = 300
+    SCRAPE_INTERVAL_KLINE_5M = 60
     KLINE_1H_HISTORY_DAYS = 30
     KLINE_5M_HISTORY_HOURS = 48
 
     # 合约指标
     SCRAPE_INTERVAL_FUNDING = 480           # 8 分钟
-    SCRAPE_INTERVAL_OI = 300               # 5 分钟
+    SCRAPE_INTERVAL_OI = 180               # 3 分钟
 
     # 容错
     MAX_RETRIES = 3

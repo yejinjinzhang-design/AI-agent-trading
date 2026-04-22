@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Outfit } from "next/font/google";
+import { Providers } from "@/components/providers";
 import "./globals.css";
 
 const outfit = Outfit({
@@ -15,8 +16,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CORAL Strategy Protocol",
-  description: "AI驱动的加密策略进化平台",
+  title: "Strategy Desk",
+  description: "Quantitative strategy management terminal",
 };
 
 export default function RootLayout({
@@ -25,9 +26,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh" className={`${outfit.variable} ${jetbrainsMono.variable} h-full`}>
-      <body className="min-h-full bg-[#0A0A0F] text-white antialiased font-outfit">
-        {children}
+    <html lang="en" className={`${outfit.variable} ${jetbrainsMono.variable} h-full`}>
+      <body className="min-h-full antialiased font-outfit" style={{ background: "#F5F7FB", color: "#1F2940" }}>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

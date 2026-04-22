@@ -25,7 +25,8 @@ import pandas as pd
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIVE_DIR = os.path.join(PROJECT_ROOT, ".live")
+# 多实例：由父进程设置 CORAL_LIVE_DIR 为绝对路径（如 .live/instances/champ）
+LIVE_DIR = os.environ.get("CORAL_LIVE_DIR", "").strip() or os.path.join(PROJECT_ROOT, ".live")
 ACTIVE_PATH = os.path.join(LIVE_DIR, "active_strategy.json")
 CRED_PATH = os.path.join(LIVE_DIR, "binance.json")
 CONFIG_PATH = os.path.join(LIVE_DIR, "runner_config.json")
@@ -372,9 +373,13 @@ def run_single_tick() -> dict:
     """执行一次 tick 并返回事件。供 --once 和 API 手动触发调用。"""
     ensure_live_dir()
     cred = read_json(CRED_PATH) or {}
+    explicit_live = os.environ.get("CORAL_LIVE_DIR", "").strip()
     env_key = os.environ.get("BINANCE_API_KEY", "").strip()
     env_secret = os.environ.get("BINANCE_API_SECRET", "").strip()
-    if env_key and env_secret:
+    # 显式实例目录时仅用该目录 binance.json，避免全局 env 串到多子账号
+    if explicit_live:
+        pass
+    elif env_key and env_secret:
         cred = {"apiKey": env_key, "apiSecret": env_secret}
     if not cred.get("apiKey") or not cred.get("apiSecret"):
         return {"ok": False, "reason": "no_credentials"}

@@ -8,6 +8,21 @@ import {
 } from "recharts";
 import type { BacktestResult, PricePoint } from "@/lib/types";
 import { BtcCandlestickChart } from "@/components/btc-candlestick-chart";
+import { T, Spinner, Card } from "@/components/page-shell";
+import Link from "next/link";
+
+// Recharts chart theme for light background
+const CHART_GRID = "rgba(45,53,97,0.08)";
+const CHART_TICK = { fill: "#9CA3AF", fontSize: 11 };
+const CHART_TOOLTIP = {
+  contentStyle: {
+    background: "rgba(255,255,255,0.95)",
+    border: "1px solid rgba(45,53,97,0.1)",
+    borderRadius: 10,
+    boxShadow: "0 4px 12px rgba(45,53,97,0.08)",
+  },
+  labelStyle: { color: "#6B7280" },
+};
 
 function StrategyPageContent() {
   const params = useSearchParams();
@@ -34,7 +49,6 @@ function StrategyPageContent() {
 
   async function loadSession() {
     try {
-      // 检查会话是否已有翻译结果
       const res = await fetch(`/api/session?id=${sessionId}`);
       if (res.ok) {
         const sess = await res.json();
@@ -54,10 +68,9 @@ function StrategyPageContent() {
           return;
         }
       }
-      // 刚翻译完，等待一秒后查询
       setTimeout(loadSession, 500);
     } catch {
-      setErrorMsg("加载会话失败，请返回重新生成策略");
+      setErrorMsg("Failed to load session. Please go back and try again.");
       setPhase("error");
     }
   }
@@ -75,7 +88,7 @@ function StrategyPageContent() {
       setBacktest(data);
       setPhase("done");
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : "回测失败");
+      setErrorMsg(e instanceof Error ? e.message : "Backtest failed");
       setPhase("error");
     }
   }
@@ -94,10 +107,10 @@ function StrategyPageContent() {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "启动失败");
+      if (!res.ok) throw new Error(data.error || "Failed to start");
       router.push(`/evolve?id=${sessionId}`);
     } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : "启动失败");
+      setErrorMsg(e instanceof Error ? e.message : "Failed to start evolution");
       setStartingEvolution(false);
     }
   }
@@ -109,45 +122,50 @@ function StrategyPageContent() {
   };
 
   return (
-    <div className="min-h-screen" style={{ background: "#0A0A0F" }}>
+    <div className="min-h-screen" style={{ background: T.bg }}>
       {/* Header */}
-      <header className="border-b px-6 py-4 flex items-center gap-4"
-        style={{ borderColor: "#1E1E2E", background: "#16161F" }}>
-        <button onClick={() => router.push("/")}
-          className="text-gray-400 hover:text-white transition-colors text-sm">← 返回</button>
+      <nav
+        className="sticky top-0 z-50 px-8 py-4 flex items-center gap-4"
+        style={{
+          background: "rgba(255,255,255,0.72)",
+          backdropFilter: "blur(16px)",
+          borderBottom: "1px solid rgba(45,53,97,0.07)",
+        }}
+      >
+        <button onClick={() => router.push("/")} className="text-sm transition-colors hover:opacity-70" style={{ color: "#6B7280" }}>
+          Back
+        </button>
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded flex items-center justify-center"
-            style={{ background: "linear-gradient(135deg, #00E5A0, #7B61FF)" }}>
-            <span className="text-black font-bold text-xs">C</span>
+          <div className="w-6 h-6 rounded flex items-center justify-center" style={{ background: "linear-gradient(135deg, #3B4EC8, #7C3AED)" }}>
+            <span className="text-white font-bold" style={{ fontSize: 11 }}>S</span>
           </div>
-          <span className="text-white font-medium text-sm">CORAL Strategy Protocol</span>
+          <span className="font-semibold text-sm" style={{ color: T.text.primary }}>Strategy Desk</span>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <StepIndicator step={1} label="翻译策略" active={phase === "translating"} done={phase !== "translating"} />
-          <div className="w-8 h-px" style={{ background: "#1E1E2E" }} />
-          <StepIndicator step={2} label="用户回测" active={phase === "backtesting"} done={phase === "done"} />
-          <div className="w-8 h-px" style={{ background: "#1E1E2E" }} />
-          <StepIndicator step={3} label="CORAL进化" active={false} done={false} />
+        <div className="ml-auto flex items-center gap-3">
+          <StepIndicator step={1} label="Translate" active={phase === "translating"} done={phase !== "translating"} />
+          <div className="w-8 h-px" style={{ background: "rgba(45,53,97,0.12)" }} />
+          <StepIndicator step={2} label="Backtest" active={phase === "backtesting"} done={phase === "done"} />
+          <div className="w-8 h-px" style={{ background: "rgba(45,53,97,0.12)" }} />
+          <StepIndicator step={3} label="Evolve" active={false} done={false} />
         </div>
-      </header>
+      </nav>
 
-      <div className="max-w-5xl mx-auto px-6 py-8">
-
-        {/* Step 1: 翻译状态 */}
+      <div className="max-w-4xl mx-auto px-8 py-8">
+        {/* Translating */}
         {phase === "translating" && (
-          <div className="flex flex-col items-center justify-center py-24">
+          <div className="flex flex-col items-center justify-center py-28">
             <Spinner />
-            <p className="text-white text-lg mt-6 font-medium">AI 正在解析你的策略...</p>
-            <p className="text-gray-500 text-sm mt-2">将自然语言转换为可执行的Python回测代码</p>
+            <p className="text-base mt-6 font-medium" style={{ color: T.text.primary }}>Translating strategy...</p>
+            <p className="text-sm mt-2" style={{ color: T.text.secondary }}>Converting natural language to executable Python</p>
           </div>
         )}
 
-        {/* Step 2: 回测中 */}
+        {/* Backtesting */}
         {phase === "backtesting" && (
-          <div className="flex flex-col items-center justify-center py-24">
-            <Spinner color="#7B61FF" />
-            <p className="text-white text-lg mt-6 font-medium">正在跑回测...</p>
-            <p className="text-gray-500 text-sm mt-2">正在基于 BTC/USDT 历史数据回测...</p>
+          <div className="flex flex-col items-center justify-center py-28">
+            <Spinner color="#7C3AED" />
+            <p className="text-base mt-6 font-medium" style={{ color: T.text.primary }}>Running backtest...</p>
+            <p className="text-sm mt-2" style={{ color: T.text.secondary }}>Testing against BTC/USDT historical data</p>
             {code && (
               <div className="mt-8 w-full max-w-2xl">
                 <CodeBlock code={code} summary={summary} />
@@ -158,138 +176,115 @@ function StrategyPageContent() {
 
         {/* Error */}
         {phase === "error" && (
-          <div className="flex flex-col items-center justify-center py-24">
-            <div className="text-4xl mb-4">⚠️</div>
-            <p className="text-red-400 text-lg font-medium mb-2">出错了</p>
-            <p className="text-gray-500 text-sm mb-6">{errorMsg}</p>
-            <button onClick={() => router.push("/")}
-              className="px-6 py-2 rounded-lg text-sm"
-              style={{ background: "#1E1E2E", color: "#9999AA" }}>
-              返回重试
+          <div className="flex flex-col items-center justify-center py-28">
+            <p className="text-lg font-medium mb-2" style={{ color: T.danger }}>Something went wrong</p>
+            <p className="text-sm mb-6" style={{ color: T.text.secondary }}>{errorMsg}</p>
+            <button onClick={() => router.push("/")} className="px-6 py-2 rounded-xl text-sm" style={{ background: "rgba(255,255,255,0.85)", color: T.text.secondary, border: "1px solid rgba(45,53,97,0.1)" }}>
+              Go back
             </button>
           </div>
         )}
 
-        {/* Done: 展示结果 */}
+        {/* Done */}
         {phase === "done" && backtest && (
-          <div className="animate-fade-in space-y-6">
-            {/* 用户输入回显 */}
+          <div className="space-y-6">
+            {/* User input echo */}
             {userInput && (
-              <div className="px-4 py-3 rounded-lg text-sm"
-                style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
-                <span className="text-gray-500 mr-2">你的想法：</span>
-                <span className="text-gray-200">{userInput}</span>
+              <div className="px-4 py-3 rounded-xl text-sm" style={{ background: "rgba(255,255,255,0.75)", border: "1px solid rgba(45,53,97,0.07)" }}>
+                <span className="font-medium" style={{ color: T.text.muted }}>Strategy idea: </span>
+                <span style={{ color: T.text.primary }}>{userInput}</span>
               </div>
             )}
 
-            {/* K线周期标签（由策略描述自动决定） */}
+            {/* Timeframe badge */}
             <div className="flex items-center gap-3 px-1">
-              <span className="text-xs px-2.5 py-1 rounded-lg font-semibold"
-                style={{ background: "rgba(123,97,255,0.12)", color: "#7B61FF", border: "1px solid rgba(123,97,255,0.3)" }}>
-                {timeframe === "1d" ? "日线" : timeframe === "4h" ? "4小时" : "1小时"}
+              <span className="text-xs px-2.5 py-1 rounded-lg font-semibold" style={{ background: "rgba(124,58,237,0.08)", color: "#7C3AED", border: "1px solid rgba(124,58,237,0.18)" }}>
+                {timeframe === "1d" ? "Daily" : timeframe === "4h" ? "4H" : "1H"}
               </span>
-              <span className="text-gray-500 text-xs">
-                BTC/USDT · {timeframe === "1d" ? "日线" : timeframe === "4h" ? "4小时" : "1小时"} 2020–2026（由策略描述自动识别）
+              <span className="text-xs" style={{ color: T.text.muted }}>
+                BTC/USDT · {timeframe === "1d" ? "Daily" : timeframe === "4h" ? "4H" : "1H"} · 2020–2026
               </span>
             </div>
 
-            {/* 指标卡片 */}
-            <div>
-              <h2 className="text-white font-semibold mb-4 flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-                  style={{ background: "#1E1E2E", color: "#9999AA" }}>你</span>
-                你的策略回测结果
-              </h2>
+            {/* Metric cards */}
+            <Card style={{ padding: "1.5rem" }}>
+              <div className="text-[10px] font-semibold uppercase tracking-widest mb-4" style={{ color: T.text.muted }}>Backtest Results</div>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                <MetricCard label="Sharpe Ratio" value={fmt(backtest.sharpe_ratio, "ratio")}
-                  positive={backtest.sharpe_ratio > 1} highlight />
-                <MetricCard label="年化收益" value={fmt(backtest.annual_return, "pct")}
-                  positive={backtest.annual_return > 0} />
-                <MetricCard label="最大回撤" value={fmt(backtest.max_drawdown, "pct")}
-                  positive={false} isDrawdown />
-                <MetricCard label="胜率" value={fmt(backtest.win_rate, "pct")}
-                  positive={backtest.win_rate > 0.5} />
-                <MetricCard label="交易次数" value={fmt(backtest.n_trades, "int")}
-                  positive={true} />
+                <MetricCard label="Sharpe Ratio" value={fmt(backtest.sharpe_ratio, "ratio")} positive={backtest.sharpe_ratio > 1} highlight />
+                <MetricCard label="Annual Return" value={fmt(backtest.annual_return, "pct")} positive={backtest.annual_return > 0} />
+                <MetricCard label="Max Drawdown" value={fmt(backtest.max_drawdown, "pct")} positive={false} isDrawdown />
+                <MetricCard label="Win Rate" value={fmt(backtest.win_rate, "pct")} positive={backtest.win_rate > 0.5} />
+                <MetricCard label="Trades" value={fmt(backtest.n_trades, "int")} positive={true} />
               </div>
-            </div>
+            </Card>
 
-            {/* BTC 价格图 + 买卖点 */}
+            {/* BTC price chart */}
             {backtest.price_chart?.length > 0 && (
               <BtcPriceChart data={backtest.price_chart} timeframe={timeframe} />
             )}
 
-            {/* 权益曲线 */}
-            <div className="p-6 rounded-2xl" style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
-              <h3 className="text-white font-medium mb-4 text-sm">
-                策略权益曲线
-                <span className="text-gray-500 font-normal ml-2">（初始资金 = 1.0）</span>
+            {/* Equity curve */}
+            <Card>
+              <h3 className="text-sm font-semibold mb-4" style={{ color: T.text.primary }}>
+                Equity Curve
+                <span className="font-normal ml-2 text-xs" style={{ color: T.text.muted }}>(initial capital = 1.0)</span>
               </h3>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={backtest.equity_curve}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1E1E2E" />
-                  <XAxis dataKey="date" tick={{ fill: "#555566", fontSize: 11 }}
-                    tickFormatter={v => v.slice(0, 7)} interval={Math.floor(backtest.equity_curve.length / 6)} />
-                  <YAxis tick={{ fill: "#555566", fontSize: 11 }} />
-                  <Tooltip contentStyle={{ background: "#16161F", border: "1px solid #1E1E2E", borderRadius: 8 }}
-                    labelStyle={{ color: "#9999AA" }}
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                  <XAxis dataKey="date" tick={CHART_TICK} tickFormatter={v => v.slice(0, 7)} interval={Math.floor(backtest.equity_curve.length / 6)} />
+                  <YAxis tick={CHART_TICK} />
+                  <Tooltip {...CHART_TOOLTIP}
                     /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
                     formatter={(v: any, name: any) => [
                       typeof v === "number" ? v.toFixed(4) : v,
-                      name === "value" ? "策略权益" : "BTC持有"
-                    ] as any} />
+                      name === "value" ? "Strategy" : "BTC Hold",
+                    ] as any}
+                  />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="value" name="你的策略" stroke="#00E5A0"
-                    dot={false} strokeWidth={2} />
-                  <Line type="monotone" dataKey="btc_hold" name="BTC 持有" stroke="#444466"
-                    dot={false} strokeWidth={1} strokeDasharray="4 4" />
+                  <Line type="monotone" dataKey="value" name="Strategy" stroke="#3B4EC8" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="btc_hold" name="BTC Hold" stroke="#B0B6C8" dot={false} strokeWidth={1} strokeDasharray="4 4" />
                 </LineChart>
               </ResponsiveContainer>
-            </div>
+            </Card>
 
-            {/* 月度收益 */}
+            {/* Monthly returns */}
             {backtest.monthly_returns.length > 0 && (
-              <div className="p-6 rounded-2xl" style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
-                <h3 className="text-white font-medium mb-4 text-sm">月度收益</h3>
+              <Card>
+                <h3 className="text-sm font-semibold mb-4" style={{ color: T.text.primary }}>Monthly Returns</h3>
                 <ResponsiveContainer width="100%" height={160}>
                   <BarChart data={backtest.monthly_returns.slice(-24)}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1E1E2E" />
-                    <XAxis dataKey="month" tick={{ fill: "#555566", fontSize: 10 }}
-                      tickFormatter={v => v.slice(2)} interval={2} />
-                    <YAxis tick={{ fill: "#555566", fontSize: 10 }}
-                      tickFormatter={v => `${(v * 100).toFixed(0)}%`} />
-                    <Tooltip contentStyle={{ background: "#16161F", border: "1px solid #1E1E2E", borderRadius: 8 }}
-                      formatter={(v: unknown) => [`${((v as number) * 100).toFixed(2)}%`, "月收益"]} />
-                    <ReferenceLine y={0} stroke="#2E2E3E" />
-                    <Bar dataKey="return" name="月收益" radius={[2, 2, 0, 0]}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                    <XAxis dataKey="month" tick={CHART_TICK} tickFormatter={v => v.slice(2)} interval={2} />
+                    <YAxis tick={CHART_TICK} tickFormatter={v => `${(v * 100).toFixed(0)}%`} />
+                    <Tooltip {...CHART_TOOLTIP} formatter={(v: unknown) => [`${((v as number) * 100).toFixed(2)}%`, "Return"]} />
+                    <ReferenceLine y={0} stroke="rgba(45,53,97,0.15)" />
+                    <Bar dataKey="return" radius={[2, 2, 0, 0]}>
                       {backtest.monthly_returns.slice(-24).map((entry, index) => (
-                        <Cell key={index} fill={entry.return >= 0 ? "#00E5A0" : "#FF4D6A"} />
+                        <Cell key={index} fill={entry.return >= 0 ? "#059669" : "#DC2626"} opacity={0.75} />
                       ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-              </div>
+              </Card>
             )}
 
-            {/* 策略代码 */}
-            <CodeBlock code={code} summary={summary} expanded={codeExpanded}
-              onToggle={() => setCodeExpanded(v => !v)} />
+            {/* Code block */}
+            <CodeBlock code={code} summary={summary} expanded={codeExpanded} onToggle={() => setCodeExpanded(v => !v)} />
 
-            {/* 进化目标选择 */}
-            <div className="rounded-2xl p-5" style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
+            {/* Evolution goal */}
+            <Card>
               <div className="flex items-center gap-2 mb-4">
-                <span className="text-xs px-2 py-0.5 rounded font-bold"
-                  style={{ background: "rgba(0,229,160,0.12)", color: "#00E5A0" }}>STEP 3</span>
-                <h3 className="text-white font-semibold text-sm">设定进化目标</h3>
-                <span className="text-gray-500 text-xs ml-1">— 告诉 AI 优化什么</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold uppercase tracking-wide" style={{ background: "rgba(59,78,200,0.08)", color: "#3B4EC8" }}>Step 3</span>
+                <h3 className="text-sm font-semibold" style={{ color: T.text.primary }}>Evolution Goal</h3>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                 {([
-                  { id: "balanced", icon: "⚖️", label: "综合平衡", desc: "Sharpe + 收益 + 回撤全面优化" },
-                  { id: "returns",  icon: "📈", label: "更高收益", desc: "最大化年化收益率" },
-                  { id: "drawdown", icon: "🛡️", label: "更低回撤", desc: "尽量减少最大亏损幅度" },
-                  { id: "sharpe",   icon: "🎯", label: "Sharpe 优先", desc: "风险调整后回报最优" },
-                  { id: "winrate",  icon: "🏆", label: "更高胜率", desc: "提升每笔交易盈利概率" },
+                  { id: "balanced", label: "Balanced", desc: "Sharpe + return + drawdown" },
+                  { id: "returns",  label: "Max Return", desc: "Maximize annual return" },
+                  { id: "drawdown", label: "Min Drawdown", desc: "Minimize peak loss" },
+                  { id: "sharpe",   label: "Sharpe", desc: "Best risk-adjusted return" },
+                  { id: "winrate",  label: "Win Rate", desc: "More winning trades" },
                 ] as const).map(goal => {
                   const selected = evolutionGoal === goal.id;
                   return (
@@ -297,99 +292,59 @@ function StrategyPageContent() {
                       key={goal.id}
                       type="button"
                       onClick={() => { setEvolutionGoal(goal.id); setCustomGoal(""); }}
-                      className="flex flex-col items-center gap-1.5 px-2 py-3.5 rounded-xl text-center transition-all duration-150"
+                      className="flex flex-col items-center gap-1.5 px-3 py-3.5 rounded-xl text-center transition-all duration-150"
                       style={{
-                        background: selected ? "rgba(0,229,160,0.08)" : "#0A0A0F",
-                        border: selected ? "1.5px solid rgba(0,229,160,0.5)" : "1.5px solid #2E2E3E",
+                        background: selected ? "rgba(59,78,200,0.08)" : "rgba(245,246,250,0.8)",
+                        border: selected ? "1.5px solid rgba(59,78,200,0.3)" : "1.5px solid rgba(45,53,97,0.08)",
                         cursor: "pointer",
                       }}
                     >
-                      <span className="text-xl">{goal.icon}</span>
-                      <span className="text-xs font-semibold" style={{ color: selected ? "#00E5A0" : "#C8C8D8" }}>
-                        {goal.label}
-                      </span>
-                      <span className="text-xs leading-tight" style={{ color: "#555566" }}>{goal.desc}</span>
+                      <span className="text-xs font-semibold" style={{ color: selected ? "#3B4EC8" : T.text.primary }}>{goal.label}</span>
+                      <span className="text-[10px] leading-tight text-center" style={{ color: T.text.muted }}>{goal.desc}</span>
                     </button>
                   );
                 })}
               </div>
 
-              {/* 分隔线 */}
               <div className="flex items-center gap-3 my-4">
-                <div className="flex-1 h-px" style={{ background: "#1E1E2E" }} />
-                <span className="text-gray-600 text-xs">或者自由描述</span>
-                <div className="flex-1 h-px" style={{ background: "#1E1E2E" }} />
+                <div className="flex-1 h-px" style={{ background: "rgba(45,53,97,0.08)" }} />
+                <span className="text-xs" style={{ color: T.text.muted }}>or describe your goal</span>
+                <div className="flex-1 h-px" style={{ background: "rgba(45,53,97,0.08)" }} />
               </div>
 
-              {/* 自由输入框 */}
-              <div
-                className="rounded-xl overflow-hidden transition-all duration-150"
-                style={{
-                  border: evolutionGoal === "custom"
-                    ? "1.5px solid rgba(0,229,160,0.5)"
-                    : "1.5px solid #2E2E3E",
-                  background: "#0A0A0F",
-                }}
-              >
+              <div className="rounded-xl overflow-hidden transition-all duration-150" style={{
+                border: evolutionGoal === "custom" ? "1.5px solid rgba(59,78,200,0.3)" : "1.5px solid rgba(45,53,97,0.08)",
+                background: "rgba(255,255,255,0.9)",
+              }}>
                 <textarea
                   value={customGoal}
-                  onChange={e => {
-                    setCustomGoal(e.target.value);
-                    if (e.target.value.trim()) setEvolutionGoal("custom");
-                  }}
-                  onFocus={() => { if (customGoal.trim()) setEvolutionGoal("custom"); }}
-                  placeholder="用自己的话描述进化方向，例如：减少震荡行情的假信号，加强趋势确认，止损控制在5%以内..."
-                  className="w-full px-4 py-3 text-sm text-white resize-none outline-none"
-                  style={{ background: "transparent", height: 64, fontFamily: "var(--font-outfit)" }}
+                  onChange={e => { setCustomGoal(e.target.value); if (e.target.value.trim()) setEvolutionGoal("custom"); }}
+                  placeholder="Describe your evolution direction, e.g. reduce false signals in sideways markets, tighter stop loss..."
+                  className="w-full px-4 py-3 text-sm resize-none outline-none"
+                  style={{ background: "transparent", height: 64, color: T.text.primary, fontFamily: "var(--font-outfit)" }}
                 />
                 {customGoal.trim() && evolutionGoal === "custom" && (
                   <div className="flex items-center justify-between px-4 pb-2.5">
-                    <span className="text-xs" style={{ color: "#00E5A0" }}>
-                      ✓ 将使用你的自定义方向
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => { setCustomGoal(""); setEvolutionGoal("balanced"); }}
-                      className="text-xs px-2 py-1 rounded"
-                      style={{ color: "#777788", background: "#16161F" }}
-                    >
-                      清除，用预设
+                    <span className="text-xs font-medium" style={{ color: T.success }}>Custom goal active</span>
+                    <button type="button" onClick={() => { setCustomGoal(""); setEvolutionGoal("balanced"); }}
+                      className="text-xs px-2 py-1 rounded-lg" style={{ color: T.text.muted, background: "rgba(45,53,97,0.05)" }}>
+                      Clear
                     </button>
                   </div>
                 )}
               </div>
-            </div>
+            </Card>
 
-            {/* AI 模型选择器 */}
-            <div className="rounded-2xl p-5" style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
+            {/* AI Model */}
+            <Card>
               <div className="flex items-center gap-2 mb-4">
-                <span className="text-xs px-2 py-0.5 rounded font-bold"
-                  style={{ background: "rgba(0,229,160,0.12)", color: "#00E5A0" }}>STEP 4</span>
-                <h3 className="text-white font-semibold text-sm">选择 AI 模型</h3>
-                <span className="text-gray-500 text-xs ml-1">— 哪个大模型负责进化</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold uppercase tracking-wide" style={{ background: "rgba(59,78,200,0.08)", color: "#3B4EC8" }}>Step 4</span>
+                <h3 className="text-sm font-semibold" style={{ color: T.text.primary }}>Select AI Model</h3>
               </div>
               <div className="flex flex-col sm:flex-row gap-3">
                 {([
-                  {
-                    id: "claude" as const,
-                    name: "Claude Sonnet 4.6",
-                    maker: "Anthropic",
-                    tag: "推荐",
-                    tagColor: "#00E5A0",
-                    desc: "官方 API · 推理强 · 代码质量高",
-                    icon: "✦",
-                    iconBg: "linear-gradient(135deg, #00E5A0, #7B61FF)",
-                  },
-                  {
-                    id: "deepseek" as const,
-                    name: "DeepSeek Chat",
-                    maker: "DeepSeek",
-                    tag: "低成本",
-                    tagColor: "#7B61FF",
-                    desc: "需配置 DEEPSEEK_API_KEY · 高性价比",
-                    icon: "◈",
-                    iconBg: "linear-gradient(135deg, #7B61FF, #4040CC)",
-                  },
+                  { id: "claude" as const, name: "Claude Sonnet 4.6", maker: "Anthropic", tag: "Recommended", desc: "Official API · strong reasoning · high code quality", accent: "#3B4EC8" },
+                  { id: "deepseek" as const, name: "DeepSeek Chat", maker: "DeepSeek", tag: "Cost-efficient", desc: "Requires DEEPSEEK_API_KEY · high value", accent: "#7C3AED" },
                 ]).map(m => {
                   const selected = provider === m.id;
                   return (
@@ -399,67 +354,53 @@ function StrategyPageContent() {
                       onClick={() => setProvider(m.id)}
                       className="flex-1 flex items-start gap-3 px-4 py-4 rounded-xl text-left transition-all duration-150"
                       style={{
-                        background: selected ? "rgba(0,229,160,0.06)" : "#0A0A0F",
-                        border: `1.5px solid ${selected ? "rgba(0,229,160,0.45)" : "#2E2E3E"}`,
+                        background: selected ? `rgba(59,78,200,0.06)` : "rgba(245,246,250,0.8)",
+                        border: `1.5px solid ${selected ? "rgba(59,78,200,0.3)" : "rgba(45,53,97,0.08)"}`,
                       }}
                     >
-                      <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-white font-bold"
-                        style={{ background: m.iconBg, fontSize: 16 }}>
-                        {m.icon}
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                        style={{ background: `${m.accent}18`, border: `1px solid ${m.accent}25` }}>
+                        <div className="w-2 h-2 rounded-sm" style={{ background: m.accent }} />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-white text-sm font-semibold">{m.name}</span>
-                          <span className="text-xs px-1.5 py-0.5 rounded font-medium"
-                            style={{ background: `${m.tagColor}18`, color: m.tagColor }}>
-                            {m.tag}
-                          </span>
-                          {selected && (
-                            <span className="ml-auto text-xs font-bold" style={{ color: "#00E5A0" }}>✓ 已选</span>
-                          )}
+                          <span className="text-sm font-semibold" style={{ color: T.text.primary }}>{m.name}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: `${m.accent}12`, color: m.accent }}>{m.tag}</span>
+                          {selected && <span className="ml-auto text-xs font-bold" style={{ color: T.success }}>Selected</span>}
                         </div>
-                        <div className="text-xs" style={{ color: "#555566" }}>{m.maker}</div>
-                        <div className="text-xs mt-1" style={{ color: "#777788" }}>{m.desc}</div>
+                        <div className="text-xs" style={{ color: T.text.muted }}>{m.maker}</div>
+                        <div className="text-xs mt-1" style={{ color: T.text.secondary }}>{m.desc}</div>
                       </div>
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </Card>
 
-            {/* 启动进化按钮 */}
+            {/* Launch button */}
             <div className="py-2 text-center">
               <button
-                onClick={() => startEvolution()}
+                onClick={startEvolution}
                 disabled={startingEvolution}
                 className="w-full max-w-lg mx-auto px-12 py-4 rounded-2xl font-bold text-base transition-all duration-200 inline-flex items-center justify-center gap-3"
                 style={{
-                  background: startingEvolution ? "#1E1E2E" : "linear-gradient(135deg, #00E5A0, #00C080)",
-                  color: startingEvolution ? "#555566" : "#0A0A0F",
+                  background: startingEvolution ? "rgba(45,53,97,0.08)" : "linear-gradient(135deg, #3B4EC8, #7C3AED)",
+                  color: startingEvolution ? T.text.muted : "white",
                   cursor: startingEvolution ? "not-allowed" : "pointer",
-                  boxShadow: startingEvolution ? "none" : "0 0 40px rgba(0,229,160,0.3)",
+                  boxShadow: startingEvolution ? "none" : "0 6px 20px rgba(59,78,200,0.25)",
                 }}
               >
                 {startingEvolution ? (
-                  <><Spinner size="sm" /><span>正在启动进化...</span></>
+                  <><Spinner size="sm" /><span>Starting evolution...</span></>
                 ) : (
-                  <><span>启动 CORAL 进化</span>
-                  <span className="text-xs font-normal opacity-80">
-                    · {provider === "claude" ? "Claude Sonnet 4.6" : "DeepSeek Chat"}
-                  </span>
-                  <span>→</span></>
+                  <><span>Start Evolution</span><span className="text-sm font-normal opacity-75">· {provider === "claude" ? "Claude Sonnet 4.6" : "DeepSeek Chat"}</span></>
                 )}
               </button>
-              <p className="text-gray-500 text-xs max-w-lg mx-auto mt-3">
-                {provider === "claude"
-                  ? "使用 ANTHROPIC_API_KEY · Claude Sonnet 4.6 官方 API"
-                  : "使用 DEEPSEEK_API_KEY · DeepSeek Chat API（需在 .env.local 配置）"}
+              <p className="text-xs max-w-lg mx-auto mt-3" style={{ color: T.text.muted }}>
+                {provider === "claude" ? "Uses ANTHROPIC_API_KEY · Claude Sonnet 4.6" : "Uses DEEPSEEK_API_KEY · configure in .env.local"}
               </p>
 
-              <BindToLiveButton
-                sessionId={sessionId}
-                hasChampion={!!backtest && !!summary}
-              />
+              <BindToLiveButton sessionId={sessionId} hasChampion={!!backtest && !!summary} />
             </div>
           </div>
         )}
@@ -470,13 +411,17 @@ function StrategyPageContent() {
 
 export default function StrategyPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center" style={{ background: "#0A0A0F" }}><Spinner /></div>}>
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center" style={{ background: T.bg }}>
+        <Spinner />
+      </div>
+    }>
       <StrategyPageContent />
     </Suspense>
   );
 }
 
-// ---- Sub-components ----
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
 function BindToLiveButton({ sessionId, hasChampion }: { sessionId: string; hasChampion: boolean }) {
   const router = useRouter();
@@ -495,45 +440,40 @@ function BindToLiveButton({ sessionId, hasChampion }: { sessionId: string; hasCh
         body: JSON.stringify({ session_id: sessionId, use_champion: useChampion }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "绑定失败");
-      setMsg({ type: "ok", text: "已绑定，正在跳转实盘面板…" });
+      if (!res.ok) throw new Error(data.error || "Bind failed");
+      setMsg({ type: "ok", text: "Strategy bound. Redirecting to live..." });
       setTimeout(() => router.push("/live"), 700);
     } catch (e) {
-      setMsg({ type: "err", text: e instanceof Error ? e.message : "绑定失败" });
+      setMsg({ type: "err", text: e instanceof Error ? e.message : "Bind failed" });
       setBusy(false);
     }
   }
 
   return (
-    <div className="mt-5 p-4 rounded-xl max-w-lg mx-auto"
-      style={{ background: "#0A0A0F", border: "1px solid #1E1E2E" }}>
+    <div className="mt-5 p-4 rounded-2xl max-w-lg mx-auto text-left"
+      style={{ background: "rgba(255,255,255,0.75)", border: "1px solid rgba(45,53,97,0.07)" }}>
       <div className="flex items-center justify-between gap-3">
-        <div className="text-left">
-          <div className="text-white text-sm font-medium">把当前策略挂到实盘</div>
-          <div className="text-gray-500 text-xs mt-0.5">
-            默认先走 paper（模拟），去实盘面板开启
-          </div>
+        <div>
+          <div className="text-sm font-medium" style={{ color: T.text.primary }}>Bind to Live Trading</div>
+          <div className="text-xs mt-0.5" style={{ color: T.text.muted }}>Starts in paper mode by default</div>
         </div>
         <button
           onClick={handleBind}
           disabled={busy || !sessionId}
-          className="px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50 whitespace-nowrap"
-          style={{ background: "#1E1E2E", color: "#E0E0E8", border: "1px solid #2E2E3E" }}
+          className="px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+          style={{ background: "rgba(59,78,200,0.08)", color: "#3B4EC8", border: "1px solid rgba(59,78,200,0.2)" }}
         >
-          {busy ? "绑定中…" : "绑定到实盘 →"}
+          {busy ? "Binding..." : "Bind to Live"}
         </button>
       </div>
       {hasChampion && (
-        <label className="flex items-center gap-2 text-xs text-gray-400 mt-3 cursor-pointer">
-          <input type="checkbox" checked={useChampion} onChange={(e) => setUseChampion(e.target.checked)} />
-          <span>使用进化冠军策略（若已完成进化）</span>
+        <label className="flex items-center gap-2 text-xs mt-3 cursor-pointer" style={{ color: T.text.secondary }}>
+          <input type="checkbox" checked={useChampion} onChange={e => setUseChampion(e.target.checked)} />
+          <span>Use champion strategy (if evolution completed)</span>
         </label>
       )}
       {msg && (
-        <p className="text-xs mt-2"
-          style={{ color: msg.type === "ok" ? "#00E5A0" : "#FF6B8A" }}>
-          {msg.text}
-        </p>
+        <p className="text-xs mt-2" style={{ color: msg.type === "ok" ? T.success : T.danger }}>{msg.text}</p>
       )}
     </div>
   );
@@ -544,15 +484,13 @@ function StepIndicator({ step, label, active, done }: { step: number; label: str
     <div className="flex items-center gap-1.5">
       <div className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
         style={{
-          background: done ? "#00E5A0" : active ? "rgba(0,229,160,0.2)" : "#1E1E2E",
-          color: done ? "#0A0A0F" : active ? "#00E5A0" : "#555566",
-          border: active ? "1.5px solid #00E5A0" : "none",
+          background: done ? T.success : active ? "rgba(59,78,200,0.12)" : "rgba(45,53,97,0.06)",
+          color: done ? "white" : active ? "#3B4EC8" : T.text.muted,
+          border: active ? "1.5px solid rgba(59,78,200,0.3)" : "none",
         }}>
         {done ? "✓" : step}
       </div>
-      <span className="text-xs" style={{ color: active ? "#00E5A0" : done ? "#9999AA" : "#555566" }}>
-        {label}
-      </span>
+      <span className="text-xs" style={{ color: active ? "#3B4EC8" : done ? T.text.secondary : T.text.muted }}>{label}</span>
     </div>
   );
 }
@@ -560,16 +498,14 @@ function StepIndicator({ step, label, active, done }: { step: number; label: str
 function MetricCard({ label, value, positive, isDrawdown, highlight }: {
   label: string; value: string; positive: boolean; isDrawdown?: boolean; highlight?: boolean;
 }) {
-  const color = isDrawdown ? "#FF4D6A" : (positive ? "#00E5A0" : "#FF4D6A");
+  const color = isDrawdown ? T.danger : (positive ? T.success : T.danger);
   return (
     <div className="p-4 rounded-xl" style={{
-      background: "#0A0A0F",
-      border: `1.5px solid ${highlight ? "rgba(0,229,160,0.3)" : "#1E1E2E"}`,
+      background: "rgba(245,246,250,0.8)",
+      border: `1.5px solid ${highlight ? "rgba(59,78,200,0.2)" : "rgba(45,53,97,0.07)"}`,
     }}>
-      <div className="text-gray-500 text-xs mb-1">{label}</div>
-      <div className="text-xl font-bold" style={{ color, fontFamily: "var(--font-jetbrains)" }}>
-        {value}
-      </div>
+      <div className="text-xs mb-1" style={{ color: T.text.muted }}>{label}</div>
+      <div className="text-xl font-bold" style={{ color, fontFamily: "var(--font-jetbrains)" }}>{value}</div>
     </div>
   );
 }
@@ -578,21 +514,21 @@ function CodeBlock({ code, summary, expanded, onToggle }: {
   code: string; summary?: string; expanded?: boolean; onToggle?: () => void;
 }) {
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
-      <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: "#1E1E2E" }}>
+    <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.78)", border: "1px solid rgba(45,53,97,0.07)" }}>
+      <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: "1px solid rgba(45,53,97,0.06)" }}>
         <div>
-          <span className="text-white text-sm font-medium">策略代码</span>
-          {summary && <span className="text-gray-500 text-xs ml-3">{summary}</span>}
+          <span className="text-sm font-semibold" style={{ color: T.text.primary }}>Strategy Code</span>
+          {summary && <span className="ml-3 text-xs" style={{ color: T.text.secondary }}>{summary}</span>}
         </div>
         <button onClick={onToggle}
-          className="text-xs px-3 py-1 rounded-lg transition-colors"
-          style={{ background: "#0A0A0F", color: "#9999AA", border: "1px solid #2E2E3E" }}>
-          {expanded ? "收起" : "展开查看代码"}
+          className="text-xs px-3 py-1.5 rounded-lg transition-opacity hover:opacity-70"
+          style={{ background: "rgba(45,53,97,0.06)", color: T.text.secondary, border: "1px solid rgba(45,53,97,0.08)" }}>
+          {expanded ? "Collapse" : "View code"}
         </button>
       </div>
       {expanded && (
         <pre className="p-5 text-xs overflow-auto max-h-80"
-          style={{ color: "#C8C8D8", fontFamily: "var(--font-jetbrains)", lineHeight: "1.6" }}>
+          style={{ color: "#374151", fontFamily: "var(--font-jetbrains)", lineHeight: "1.6", background: "#FAFBFF" }}>
           {code}
         </pre>
       )}
@@ -600,70 +536,29 @@ function CodeBlock({ code, summary, expanded, onToggle }: {
   );
 }
 
-// ---- BTC 价格图 + 买卖点 ----
-
 function BtcPriceChart({ data, timeframe = "1d" }: { data: PricePoint[]; timeframe?: string }) {
   const buyCount = data.filter(d => d.buy).length;
   const sellCount = data.filter(d => d.sell).length;
-  const tfLabel: Record<string, string> = { "1d": "日线", "4h": "4小时", "1h": "1小时" };
+  const tfLabel: Record<string, string> = { "1d": "Daily", "4h": "4H", "1h": "1H" };
 
   return (
-    <div className="p-6 rounded-2xl" style={{ background: "#16161F", border: "1px solid #1E1E2E" }}>
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-white font-medium text-sm">
-          BTC/USDT {tfLabel[timeframe] ?? timeframe} · K 线与买卖点
+    <Card>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold" style={{ color: T.text.primary }}>
+          BTC/USDT {tfLabel[timeframe] ?? timeframe} · Price & Signals
         </h3>
         <div className="flex items-center gap-4 text-xs">
-          <span className="flex items-center gap-1.5">
-            <svg width="12" height="12" viewBox="0 0 12 12">
-              <polygon points="6,0 0,12 12,12" fill="#00E5A0" />
-            </svg>
-            <span style={{ color: "#9999AA" }}>买入 {buyCount} 次</span>
+          <span className="flex items-center gap-1.5" style={{ color: T.text.muted }}>
+            <svg width="10" height="10" viewBox="0 0 10 10"><polygon points="5,0 0,10 10,10" fill={T.success} /></svg>
+            {buyCount} buys
           </span>
-          <span className="flex items-center gap-1.5">
-            <svg width="12" height="12" viewBox="0 0 12 12">
-              <polygon points="6,12 0,0 12,0" fill="#FF4D6A" />
-            </svg>
-            <span style={{ color: "#9999AA" }}>卖出 {sellCount} 次</span>
+          <span className="flex items-center gap-1.5" style={{ color: T.text.muted }}>
+            <svg width="10" height="10" viewBox="0 0 10 10"><polygon points="5,10 0,0 10,0" fill={T.danger} /></svg>
+            {sellCount} sells
           </span>
         </div>
       </div>
-
       <BtcCandlestickChart data={data} height={300} title="" buyPriceKey="buy" sellPriceKey="sell" />
-
-      <div className="flex items-center gap-6 mt-3 justify-center text-xs" style={{ color: "#555566" }}>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "#26d0a2" }} />
-          <span>阳线 / </span>
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "#ff4d6a" }} />
-          <span>阴线</span>
-        </span>
-        <span className="flex items-center gap-1.5">
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <polygon points="5,0 0,10 10,10" fill="#00E5A0" />
-          </svg>
-          买入
-        </span>
-        <span className="flex items-center gap-1.5">
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <polygon points="5,10 0,0 10,0" fill="#FF4D6A" />
-          </svg>
-          卖出
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function Spinner({ color = "#00E5A0", size = "md" }: { color?: string; size?: "sm" | "md" }) {
-  const s = size === "sm" ? 16 : 32;
-  return (
-    <div style={{
-      width: s, height: s,
-      border: `2px solid rgba(255,255,255,0.1)`,
-      borderTopColor: color,
-      borderRadius: "50%",
-      animation: "spin 0.8s linear infinite",
-    }} />
+    </Card>
   );
 }

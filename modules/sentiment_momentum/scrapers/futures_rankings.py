@@ -200,6 +200,104 @@ class FuturesRankingsScraper:
         self.session.add_all(rows)
         return len(rows)
 
+    def _write_short_mover_rankings(
+        self,
+        snapshot_at: datetime,
+        all_current: list[dict],
+    ) -> dict[str, int]:
+        """
+        基于本地 5m K 线生成更实时的短周期榜：
+        - gainers_5m：最近一根 5m K 线涨幅
+        - losers_5m：最近一根 5m K 线跌幅
+        - volume_5m：最近一根 5m K 线 USDT 成交额
+        """
+        latest = self.session.execute(text("""
+            SELECT MAX(open_time) FROM price_klines_5m
+        """)).fetchone()
+        latest_open_time = latest[0] if latest else None
+        if not latest_open_time:
+            logger.warning("[rankings] 无 5m K 线，跳过短周期异动榜")
+            return {"gainers_5m_count": 0, "losers_5m_count": 0, "volume_5m_count": 0}
+
+        if isinstance(latest_open_time, str):
+            latest_dt = datetime.fromisoformat(latest_open_time.replace("T", " ").split(".")[0])
+        else:
+            latest_dt = latest_open_time
+        age_seconds = (snapshot_at - latest_dt).total_seconds()
+        if age_seconds > 10 * 60:
+            logger.warning(
+                "[rankings] 最新 5m K 线已过期 %.1f 分钟，跳过短周期异动榜",
+                age_seconds / 60,
+            )
+            return {"gainers_5m_count": 0, "losers_5m_count": 0, "volume_5m_count": 0}
+
+        rows = self.session.execute(text("""
+            WITH ranked AS (
+                SELECT
+                    k.symbol,
+                    k.open_time,
+                    CAST(k.open AS REAL) AS open_price,
+                    CAST(k.close AS REAL) AS close_price,
+                    CAST(k.quote_volume AS REAL) AS quote_volume,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY k.symbol ORDER BY k.open_time DESC
+                    ) AS rn
+                FROM price_klines_5m k
+                INNER JOIN futures_universe u ON u.symbol = k.symbol
+                WHERE u.status = 'TRADING'
+            )
+            SELECT symbol, open_price, close_price, quote_volume, open_time
+            FROM ranked
+            WHERE rn = 1 AND open_price > 0
+        """)).fetchall()
+
+        items: list[dict] = []
+        for r in rows:
+            open_price = float(r[1] or 0)
+            close_price = float(r[2] or 0)
+            if open_price <= 0:
+                continue
+            pct = (close_price - open_price) / open_price * 100
+            items.append({
+                "symbol": r[0],
+                "priceChange5mPercent": pct,
+                "quoteVolume5m": float(r[3] or 0),
+                "open_time": r[4],
+            })
+
+        top_n = getattr(cfg, "SHORT_MOVER_TOP_N", 30)
+        gainers = sorted(items, key=lambda x: x["priceChange5mPercent"], reverse=True)
+        losers = sorted(items, key=lambda x: x["priceChange5mPercent"])
+        volumes = sorted(items, key=lambda x: x["quoteVolume5m"], reverse=True)
+
+        stats = {
+            "gainers_5m_count": self._write_ranking(
+                gainers, "gainers_5m", "priceChange5mPercent", snapshot_at, top_n=top_n
+            ),
+            "losers_5m_count": self._write_ranking(
+                losers, "losers_5m", "priceChange5mPercent", snapshot_at, top_n=top_n
+            ),
+            "volume_5m_count": self._write_ranking(
+                volumes, "volume_5m", "quoteVolume5m", snapshot_at, top_n=top_n
+            ),
+        }
+
+        for ranking_type, ranking_items, metric_key in (
+            ("gainers_5m", gainers, "priceChange5mPercent"),
+            ("losers_5m", losers, "priceChange5mPercent"),
+            ("volume_5m", volumes, "quoteVolume5m"),
+        ):
+            for rank, item in enumerate(ranking_items[:top_n], 1):
+                all_current.append({
+                    "symbol": item["symbol"],
+                    "ranking_type": ranking_type,
+                    "rank": rank,
+                    "metric_value": _safe_decimal(item.get(metric_key, "0")),
+                    "snapshot_at": snapshot_at,
+                })
+
+        return stats
+
     # ── 进出榜事件追踪 ────────────────────────────────────────────────────────
 
     def _get_prev_snapshot(self) -> dict[tuple[str, str], int]:
@@ -374,9 +472,17 @@ class FuturesRankingsScraper:
                        f"{cfg.BINANCE_FUTURES_API}/fapi/v1/premiumIndex")
             stats.update({"funding_high_count": 0, "funding_low_count": 0})
 
+        # ── 3. 本地 5m K 线 → 短周期异动榜
+        try:
+            stats.update(self._write_short_mover_rankings(snapshot_at, all_current))
+        except Exception as e:
+            logger.error(f"[rankings] 5m 短周期榜失败: {e}")
+            _log_error(self.session, type(e).__name__, str(e), "price_klines_5m")
+            stats.update({"gainers_5m_count": 0, "losers_5m_count": 0, "volume_5m_count": 0})
+
         self.session.commit()
 
-        # ── 3. 进出榜事件更新
+        # ── 4. 进出榜事件更新
         if all_current and prev_map is not None:
             entered, updated, exited = self._update_entry_events(all_current, prev_map, snapshot_at)
             self.session.commit()

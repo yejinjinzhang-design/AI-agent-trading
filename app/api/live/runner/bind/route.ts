@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   clearActiveStrategy,
   saveActiveStrategy,
+  sanitizeInstanceId,
 } from "@/lib/binance-live-store";
 import { loadSession } from "@/lib/session-store";
 
@@ -9,6 +10,9 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const sessionId = typeof body.session_id === "string" ? body.session_id : "";
   const useChampion = Boolean(body.use_champion);
+  const instanceId = sanitizeInstanceId(
+    typeof body.instance_id === "string" ? body.instance_id : undefined
+  );
 
   if (!sessionId) {
     return NextResponse.json({ error: "缺少 session_id" }, { status: 400 });
@@ -29,17 +33,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  saveActiveStrategy({
-    session_id: sessionId,
-    code,
-    timeframe: session.timeframe || "1h",
-    summary: session.strategy_summary,
-    bound_at: new Date().toISOString(),
-  });
-  return NextResponse.json({ ok: true });
+  saveActiveStrategy(
+    {
+      session_id: sessionId,
+      code,
+      timeframe: session.timeframe || "1h",
+      summary: session.strategy_summary,
+      bound_at: new Date().toISOString(),
+    },
+    instanceId
+  );
+  return NextResponse.json({ ok: true, instance_id: instanceId });
 }
 
-export async function DELETE() {
-  clearActiveStrategy();
-  return NextResponse.json({ ok: true });
+export async function DELETE(req: NextRequest) {
+  const instanceId = sanitizeInstanceId(
+    req.nextUrl.searchParams.get("instance_id")
+  );
+  clearActiveStrategy(instanceId);
+  return NextResponse.json({ ok: true, instance_id: instanceId });
 }

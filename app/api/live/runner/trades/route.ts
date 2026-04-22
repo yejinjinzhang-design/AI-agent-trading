@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { getLivePaths } from "@/lib/binance-live-store";
+import { getLivePaths, sanitizeInstanceId } from "@/lib/binance-live-store";
 
 type RawEvent = {
   kind?: string;
@@ -28,10 +28,13 @@ type Trade = {
   cumulative_pnl: number;
 };
 
-export async function GET() {
-  const { EVENTS_PATH } = getLivePaths();
+export async function GET(req: NextRequest) {
+  const instanceId = sanitizeInstanceId(
+    req.nextUrl.searchParams.get("instance_id")
+  );
+  const { EVENTS_PATH } = getLivePaths(instanceId);
   if (!fs.existsSync(EVENTS_PATH)) {
-    return NextResponse.json({ trades: [], equity_curve: [] });
+    return NextResponse.json({ trades: [], equity_curve: [], instance_id: instanceId });
   }
   const raw = fs.readFileSync(EVENTS_PATH, "utf-8");
   const lines = raw.split("\n").filter(Boolean);
@@ -83,7 +86,7 @@ export async function GET() {
     cumulative: t.cumulative_pnl,
   }));
 
-  return NextResponse.json({ trades, equity_curve });
+  return NextResponse.json({ trades, equity_curve, instance_id: instanceId });
 }
 
 function round(n: number, p: number): number {

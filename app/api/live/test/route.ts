@@ -3,7 +3,11 @@ import { execSync } from "child_process";
 import path from "path";
 import os from "os";
 import { writeFileSync, unlinkSync } from "fs";
-import { loadBinanceCredentials } from "@/lib/binance-live-store";
+import {
+  getAccount,
+  loadBinanceCredentials,
+  sanitizeInstanceId,
+} from "@/lib/binance-live-store";
 
 const PYTHON = process.env.PYTHON_PATH || "python3";
 const PROJECT_ROOT = process.cwd();
@@ -11,18 +15,37 @@ const PROJECT_ROOT = process.cwd();
 type TestBody = {
   apiKey?: string;
   apiSecret?: string;
+  /** 已登记的子账号 id，优先于手动填写 */
+  account_id?: string;
+  instance_id?: string;
 };
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as TestBody;
   let apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   let apiSecret = typeof body.apiSecret === "string" ? body.apiSecret.trim() : "";
+  const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
+  const instanceId = sanitizeInstanceId(
+    typeof body.instance_id === "string" ? body.instance_id : undefined
+  );
+
+  if (accountId) {
+    const acc = getAccount(accountId);
+    if (!acc) {
+      return NextResponse.json({ error: "账户 id 不存在" }, { status: 400 });
+    }
+    apiKey = acc.apiKey;
+    apiSecret = acc.apiSecret;
+  }
 
   if (!apiKey || !apiSecret) {
-    const stored = loadBinanceCredentials();
+    const stored = loadBinanceCredentials(instanceId);
     if (!stored) {
       return NextResponse.json(
-        { error: "未配置 API：请在表单填写并保存，或设置环境变量 BINANCE_API_KEY / BINANCE_API_SECRET" },
+        {
+          error:
+            "未配置 API：请填写 Key/Secret、选择已保存子账号，或设置环境变量 BINANCE_API_KEY / BINANCE_API_SECRET",
+        },
         { status: 400 }
       );
     }
@@ -45,7 +68,12 @@ export async function POST(req: NextRequest) {
       maxBuffer: 2 * 1024 * 1024,
     });
     const line = out.toString().trim().split("\n").pop() || "{}";
-    const parsed = JSON.parse(line) as { ok?: boolean; error?: string; usdt?: number; btc?: number };
+    const parsed = JSON.parse(line) as {
+      ok?: boolean;
+      error?: string;
+      usdt?: number;
+      btc?: number;
+    };
     if (!parsed.ok) {
       return NextResponse.json(
         { error: parsed.error || "连接失败" },
@@ -63,10 +91,10 @@ export async function POST(req: NextRequest) {
       const raw = Buffer.from(
         (err as { stdout?: Buffer }).stdout || Buffer.alloc(0)
       ).toString();
-      const line = raw.trim().split("\n").pop();
-      if (line) {
+      const ln = raw.trim().split("\n").pop();
+      if (ln) {
         try {
-          fromScript = JSON.parse(line) as { ok?: boolean; error?: string };
+          fromScript = JSON.parse(ln) as { ok?: boolean; error?: string };
         } catch {
           /* ignore */
         }

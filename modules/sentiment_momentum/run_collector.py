@@ -149,7 +149,7 @@ async def _safe_run(coro, task_name: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def job_square_latest() -> None:
-    """30s：广场最新帖子（1 页 = 20 条）"""
+    """20s：广场最新帖子（1 页 = 20 条）"""
     async def _run():
         with SessionFactory() as sess:
             scraper = BinanceSquareScraper(sess, square_client)
@@ -167,7 +167,7 @@ async def job_square_hot() -> None:
 
 
 async def job_futures_rankings() -> None:
-    """5min：合约榜单（gainers/losers/volume/funding_high/funding_low）"""
+    """1min：合约榜单（24h榜 + 5m短周期异动榜）"""
     async def _run():
         with SessionFactory() as sess:
             scraper = FuturesRankingsScraper(sess)
@@ -178,7 +178,7 @@ async def job_futures_rankings() -> None:
 
 
 async def job_klines_5m() -> None:
-    """5min：拉全量 5m K 线最新 1 根"""
+    """1min：拉全量 5m K 线最新 1 根（当前 5m K 会持续更新）"""
     async def _run():
         with SessionFactory() as sess:
             scraper = PriceKlineScraper(sess)
@@ -208,7 +208,7 @@ async def job_funding_rates() -> None:
 
 
 async def job_open_interest() -> None:
-    """5min：持仓量快照（全量 symbol）"""
+    """3min：持仓量快照（全量 symbol）"""
     async def _run():
         with SessionFactory() as sess:
             scraper = FundingOIScraper(sess)
@@ -276,7 +276,7 @@ _TIME_COL: dict[str, str] = {
 
 
 async def job_signal_and_trade() -> None:
-    """每 5 分钟：运行信号引擎 + Paper Trader tick"""
+    """每 1 分钟：运行信号引擎 + Paper Trader tick"""
     async def _run():
         with SessionFactory() as sess:
             engine = SignalEngine(sess)
@@ -427,17 +427,17 @@ async def startup() -> None:
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     # 高频
-    scheduler.add_job(job_square_latest,      "interval", seconds=30,
+    scheduler.add_job(job_square_latest,      "interval", seconds=cfg.SCRAPE_INTERVAL_SQUARE_LATEST,
                       max_instances=1, coalesce=True, misfire_grace_time=15)
-    scheduler.add_job(job_square_hot,         "interval", seconds=120,
+    scheduler.add_job(job_square_hot,         "interval", seconds=cfg.SCRAPE_INTERVAL_SQUARE_HOT,
                       max_instances=1, coalesce=True, misfire_grace_time=30)
-    scheduler.add_job(job_futures_rankings,   "interval", seconds=300,
+    scheduler.add_job(job_futures_rankings,   "interval", seconds=cfg.SCRAPE_INTERVAL_RANKINGS,
                       max_instances=1, coalesce=True, misfire_grace_time=60)
-    scheduler.add_job(job_klines_5m,          "interval", seconds=300,
+    scheduler.add_job(job_klines_5m,          "interval", seconds=cfg.SCRAPE_INTERVAL_KLINE_5M,
                       max_instances=1, coalesce=True, misfire_grace_time=60)
-    scheduler.add_job(job_open_interest,      "interval", seconds=300,
+    scheduler.add_job(job_open_interest,      "interval", seconds=cfg.SCRAPE_INTERVAL_OI,
                       max_instances=1, coalesce=True, misfire_grace_time=60)
-    scheduler.add_job(job_funding_rates,      "interval", seconds=480,
+    scheduler.add_job(job_funding_rates,      "interval", seconds=cfg.SCRAPE_INTERVAL_FUNDING,
                       max_instances=1, coalesce=True, misfire_grace_time=60)
 
     # 低频
@@ -449,7 +449,7 @@ async def startup() -> None:
                       max_instances=1)
     scheduler.add_job(job_update_volume_tiers,    "interval", hours=1,
                       max_instances=1)
-    scheduler.add_job(job_signal_and_trade,       "interval", seconds=300,
+    scheduler.add_job(job_signal_and_trade,       "interval", seconds=60,
                       max_instances=1, coalesce=True, misfire_grace_time=60)
     scheduler.add_job(job_cleanup_old_data,       "cron", hour=3, minute=0,
                       max_instances=1)
@@ -458,10 +458,8 @@ async def startup() -> None:
     logger.info("[startup] 调度器已启动，共 9 个任务")
     logger.info("")
 
-    # 立即触发一轮（避免等待第一次间隔）
-    asyncio.create_task(_safe_run(
-        _get_square_latest_coro(), "square_latest"
-    ))
+    # 立即触发关键任务（避免等待第一次间隔）；串行跑，减少 SQLite 写锁竞争
+    asyncio.create_task(_warm_start_tick())
 
 
 def _get_square_latest_coro():
@@ -470,6 +468,13 @@ def _get_square_latest_coro():
             scraper = BinanceSquareScraper(sess, square_client)
             return await scraper.scrape_hot_feed(pages=1)
     return _run()
+
+
+async def _warm_start_tick() -> None:
+    await _safe_run(_get_square_latest_coro(), "square_latest")
+    await job_klines_5m()
+    await job_futures_rankings()
+    await job_signal_and_trade()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
