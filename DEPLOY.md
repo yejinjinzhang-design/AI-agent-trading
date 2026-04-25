@@ -60,6 +60,8 @@ Railway 是「把代码交给它，它一键部署并让进程一直跑」的托
 | `DEEPSEEK_API_KEY` | 如果要用 DeepSeek |
 | `BINANCE_API_KEY` | Binance API Key（可选，也可在网页里保存） |
 | `BINANCE_API_SECRET` | Binance Secret（同上） |
+| `TREND_SCALING_AUTO_START` | `1`（让 trend-scaling cloud loop 随容器自动恢复） |
+| `TREND_TICK_SECONDS` | `900`（默认 15 分钟一次，按需调整） |
 
 > 填了 `BINANCE_API_*` 环境变量后，网页无需再次保存；留空则第一次访问 `/live` 时在网页保存一次。
 
@@ -80,7 +82,10 @@ Railway 是「把代码交给它，它一键部署并让进程一直跑」的托
 ### Railway 常见问题
 - **币安 IP 白名单**：Railway 的出口 IP 会变，建议 **不要设 IP 白名单**（或多填几个）
 - **容器重启后策略是否继续**：Dockerfile 的 `scripts/start.sh` 会自动恢复已绑定的策略
+- **Trend Scaling 是否继续**：把 `TREND_SCALING_AUTO_START=1` 打开后，容器启动会自动拉起 `trend_scaling_paper_runner --cloud-loop`，进程异常退出也会在容器内自动重拉
 - **Volume 数据**（历史事件、绑定策略）：Railway 默认容器无持久化，重部署后 `.live/` 会清空；强持久需要在 Settings → Volumes 挂一个 `/app/.live`
+
+> 如果你希望 **电脑关机、朋友继续改代码、云端仍持续跑**，核心是：代码部署到 Railway/VPS 后由云端容器或 `systemd` 托管，而不是靠本地终端会话。
 
 ---
 
@@ -174,8 +179,30 @@ StandardError=append:/root/coral/.live/runner.log
 WantedBy=multi-user.target
 EOF
 
+sudo tee /etc/systemd/system/coral-trend-scaling.service >/dev/null <<EOF
+[Unit]
+Description=Coral Trend Scaling Cloud Loop
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/coral
+EnvironmentFile=/root/coral/.env.local
+Environment=PYTHON_PATH=python3
+Environment=TREND_TICK_SECONDS=900
+ExecStart=/bin/sh /root/coral/scripts/trend_scaling_cloud_loop.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/root/coral/modules/sentiment_momentum/logs/trend_scaling_cloud_loop.log
+StandardError=append:/root/coral/modules/sentiment_momentum/logs/trend_scaling_cloud_loop.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 sudo systemctl daemon-reload
-sudo systemctl enable --now coral-web coral-runner
+sudo systemctl enable --now coral-web coral-runner coral-trend-scaling
 ```
 
 ### 6. 开防火墙
@@ -194,6 +221,11 @@ sudo systemctl enable --now coral-web coral-runner
 > ```bash
 > sudo systemctl stop coral-runner
 > sudo systemctl disable coral-runner
+> ```
+> Trend Scaling cloud loop 同理：
+> ```bash
+> sudo systemctl stop coral-trend-scaling
+> sudo systemctl disable coral-trend-scaling
 > ```
 > 日常切到空仓只需把 `.live/runner_config.json` 的 `mode` 改回 `paper`，或解除绑定。
 

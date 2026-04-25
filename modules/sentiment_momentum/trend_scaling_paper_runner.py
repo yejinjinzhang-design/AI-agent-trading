@@ -18,6 +18,8 @@ from . import aggressive_yasmin_executor as executor
 from .config import CollectorConfig
 
 DEFAULT_TICK_SECONDS = 15 * 60
+BAR_INTERVAL_SECONDS = 15 * 60
+DEFAULT_BAR_CLOSE_DELAY_SECONDS = 60
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_FILE = LOG_DIR / "trend_scaling_paper_runner.log"
 SUMMARY_INTERVAL_SECONDS = 24 * 60 * 60
@@ -35,6 +37,14 @@ def _utcnow() -> datetime:
 
 def _now_iso() -> str:
     return _utcnow().isoformat()
+
+
+def _seconds_until_next_bar_tick(delay_seconds: int = DEFAULT_BAR_CLOSE_DELAY_SECONDS) -> float:
+    now = datetime.now(timezone.utc)
+    epoch = now.timestamp()
+    next_bar = (int(epoch // BAR_INTERVAL_SECONDS) + 1) * BAR_INTERVAL_SECONDS
+    target = next_bar + max(0, int(delay_seconds))
+    return max(1.0, target - epoch)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -201,6 +211,52 @@ def _activate_paper_v1_config(conn: sqlite3.Connection) -> tuple[executor.Yasmin
     return params, version
 
 
+def _create_run_record(conn: sqlite3.Connection, *, pid: int | None, status: str) -> tuple[str, str]:
+    params, version = _activate_paper_v1_config(conn)
+    now = _utcnow()
+    expected_end = now + timedelta(days=1)
+    run_id = f"yasmin-paper-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    # Ensure a persistent paper account exists and never auto-resets.
+    conn.execute(
+        """
+        UPDATE yasmin_btc_state
+        SET
+          mode='paper',
+          account_mode='paper',
+          account_currency='USDT',
+          account_status='running',
+          initial_capital=CASE WHEN initial_capital IS NULL OR initial_capital<=0 THEN 1000 ELSE initial_capital END,
+          updated_at=?
+        WHERE id=1
+        """,
+        (_now_iso(),),
+    )
+    conn.execute("UPDATE yasmin_btc_state SET mode='paper', updated_at=? WHERE id=1", (_now_iso(),))
+    conn.execute(
+        """
+        INSERT INTO yasmin_paper_runs
+          (run_id, strategy_version, mode, continuous_run, initial_capital_usdt,
+           status, started_at, expected_end_at, pid, config_version, last_daily_summary_at, stats_json, updated_at)
+        VALUES (?, ?, 'paper', 1, 1000, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            executor.STRATEGY_VERSION,
+            status,
+            now.isoformat(),
+            expected_end.isoformat(),
+            pid,
+            version,
+            now.isoformat(),
+            json.dumps({"params": asdict(params)}, ensure_ascii=False),
+            now.isoformat(),
+        ),
+    )
+    _event(conn, run_id, "RUN_STARTED", "continuous paper simulation started (no auto-stop, no auto-reset)", {"config_version": version})
+    conn.commit()
+    return run_id, version
+
+
 def start_run(tick_seconds: int = DEFAULT_TICK_SECONDS) -> dict[str, Any]:
     conn = _connect()
     try:
@@ -208,44 +264,7 @@ def start_run(tick_seconds: int = DEFAULT_TICK_SECONDS) -> dict[str, Any]:
         existing = _active_run(conn)
         if existing:
             return status(conn)
-        params, version = _activate_paper_v1_config(conn)
-        now = _utcnow()
-        run_id = f"yasmin-paper-{int(time.time())}-{uuid.uuid4().hex[:6]}"
-        # Ensure a persistent paper account exists and never auto-resets.
-        conn.execute(
-            """
-            UPDATE yasmin_btc_state
-            SET
-              mode='paper',
-              account_mode='paper',
-              account_currency='USDT',
-              account_status='running',
-              initial_capital=CASE WHEN initial_capital IS NULL OR initial_capital<=0 THEN 1000 ELSE initial_capital END,
-              updated_at=?
-            WHERE id=1
-            """,
-            (_now_iso(),),
-        )
-        conn.execute("UPDATE yasmin_btc_state SET mode='paper', updated_at=? WHERE id=1", (_now_iso(),))
-        conn.execute(
-            """
-            INSERT INTO yasmin_paper_runs
-              (run_id, strategy_version, mode, continuous_run, initial_capital_usdt,
-               status, started_at, config_version, last_daily_summary_at, stats_json, updated_at)
-            VALUES (?, ?, 'paper', 1, 1000, 'starting', ?, ?, ?, ?, ?)
-            """,
-            (
-                run_id,
-                executor.STRATEGY_VERSION,
-                now.isoformat(),
-                version,
-                now.isoformat(),
-                json.dumps({"params": asdict(params)}, ensure_ascii=False),
-                now.isoformat(),
-            ),
-        )
-        _event(conn, run_id, "RUN_STARTED", "continuous paper simulation started (no auto-stop, no auto-reset)", {"config_version": version})
-        conn.commit()
+        run_id, _version = _create_run_record(conn, pid=None, status="starting")
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         log = open(LOG_FILE, "a", encoding="utf-8")
@@ -273,6 +292,25 @@ def start_run(tick_seconds: int = DEFAULT_TICK_SECONDS) -> dict[str, Any]:
         return status(conn)
     finally:
         conn.close()
+
+
+def cloud_loop(tick_seconds: int = DEFAULT_TICK_SECONDS) -> None:
+    """Foreground supervisor for cloud/systemd: keep one paper run alive."""
+    while True:
+        conn = _connect()
+        try:
+            ensure_tables(conn)
+            run = _active_run(conn)
+            if run:
+                run_id = run["run_id"]
+                conn.execute("UPDATE yasmin_paper_runs SET pid=?, updated_at=? WHERE run_id=?", (os.getpid(), _now_iso(), run_id))
+                conn.commit()
+            else:
+                run_id, _version = _create_run_record(conn, pid=os.getpid(), status="running")
+        finally:
+            conn.close()
+        run_loop(run_id, tick_seconds, align_to_bar_close=True)
+        time.sleep(5)
 
 
 def stop_run() -> dict[str, Any]:
@@ -703,7 +741,7 @@ def rollback_review(review_id: str) -> dict[str, Any]:
         conn.close()
 
 
-def run_loop(run_id: str, tick_seconds: int) -> None:
+def run_loop(run_id: str, tick_seconds: int, align_to_bar_close: bool = True) -> None:
     conn = _connect()
     try:
         ensure_tables(conn)
@@ -728,7 +766,7 @@ def run_loop(run_id: str, tick_seconds: int) -> None:
                 conn.commit()
 
                 # Daily summary + Coral review (candidate only), every 24h.
-                last_sum = _parse_dt(run.get("last_daily_summary_at"))
+                last_sum = _parse_dt(run["last_daily_summary_at"])
                 if (not last_sum) or ((_utcnow() - last_sum).total_seconds() >= SUMMARY_INTERVAL_SECONDS):
                     generate_daily_summary(conn, run_id)
                     generate_coral_review(conn, run_id)
@@ -746,7 +784,10 @@ def run_loop(run_id: str, tick_seconds: int) -> None:
                 )
                 _event(conn, run_id, "POSITION_SYNC_ERROR", "paper runner tick failed", {"error": str(exc)})
                 conn.commit()
-            time.sleep(max(5, int(tick_seconds)))
+            if align_to_bar_close:
+                time.sleep(_seconds_until_next_bar_tick())
+            else:
+                time.sleep(max(5, int(tick_seconds)))
     finally:
         conn.close()
 
@@ -764,7 +805,7 @@ def generate_daily_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, A
         return {"ok": False, "error": "unknown run_id"}
     window_end = now
     # Rolling 24h: start from last summary end (or started_at).
-    last_sum = _parse_dt(run.get("last_daily_summary_at")) or _parse_dt(run.get("started_at")) or (now - timedelta(days=1))
+    last_sum = _parse_dt(run["last_daily_summary_at"]) or _parse_dt(run["started_at"]) or (now - timedelta(days=1))
     window_start = last_sum
 
     snap = _paper_account_snapshot(conn)
@@ -803,9 +844,9 @@ def generate_daily_summary(conn: sqlite3.Connection, run_id: str) -> dict[str, A
         "exit_reversal_count": stats.get("exit_reversal_count"),
         "exit_timeout_count": stats.get("exit_timeout_count"),
         "max_drawdown": max_dd,
-        "runner_error_count": int(run.get("error_count") or 0),
-        "runner_status": run.get("status"),
-        "last_tick_at": run.get("last_tick_at"),
+        "runner_error_count": int(run["error_count"] or 0),
+        "runner_status": run["status"],
+        "last_tick_at": run["last_tick_at"],
     }
     now_iso = _now_iso()
     conn.execute(
@@ -940,12 +981,16 @@ def main() -> None:
     ap.add_argument("--reject", default="")
     ap.add_argument("--rollback-review", default="")
     ap.add_argument("--run-loop", action="store_true")
+    ap.add_argument("--cloud-loop", action="store_true")
     ap.add_argument("--run-id", default="")
     ap.add_argument("--tick-seconds", type=int, default=DEFAULT_TICK_SECONDS)
     args = ap.parse_args()
 
     if args.run_loop:
         run_loop(args.run_id, args.tick_seconds)
+        return
+    if args.cloud_loop:
+        cloud_loop(args.tick_seconds)
         return
 
     if args.start:

@@ -1,0 +1,19 @@
+[Unit]
+Description=Coral Trend Scaling Cloud Loop
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/coral
+EnvironmentFile=/root/coral/.env.local
+Environment=PYTHON_PATH=python3
+Environment=TREND_TICK_SECONDS=900
+ExecStart=/bin/sh /root/coral/scripts/trend_scaling_cloud_loop.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/root/coral/modules/sentiment_momentum/logs/trend_scaling_cloud_loop.log
+StandardError=append:/root/coral/modules/sentiment_momentum/logs/trend_scaling_cloud_loop.log
+
+[Install]
+WantedBy=multi-user.target

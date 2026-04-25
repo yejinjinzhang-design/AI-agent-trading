@@ -31,7 +31,7 @@ ENV NODE_ENV=production \
 # Python 运行时（ccxt/pandas/numpy）
 RUN apk add --no-cache python3 py3-pip tini ca-certificates \
     && python3 -m pip install --break-system-packages --no-cache-dir \
-       ccxt pandas numpy
+       ccxt pandas numpy certifi
 
 # Next.js standalone 产物
 COPY --from=builder /app/public ./public
@@ -39,12 +39,15 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
 # 业务代码（standalone 不会把 python/ 和 data/ 打进去）
+COPY --from=builder /app/modules ./modules
 COPY --from=builder /app/python ./python
 COPY --from=builder /app/data ./data
 COPY --from=builder /app/eval ./eval
 COPY --from=builder /app/scripts ./scripts
 
-RUN mkdir -p /app/.live && chmod 700 /app/.live
+RUN mkdir -p /app/.live /app/modules/sentiment_momentum/logs \
+    && chmod 700 /app/.live \
+    && chmod +x /app/scripts/*.sh
 
 EXPOSE 3000
 ENTRYPOINT ["/sbin/tini", "--"]
